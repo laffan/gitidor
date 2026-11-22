@@ -1,0 +1,54 @@
+[package]
+name = "gitidor"
+version = "0.1.0"
+edition = "2021"
+description = "A columnar markdown editor for static sites that live in GitHub repositories"
+rust-version = "1.85"
+
+[lib]
+name = "gitidor_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+percent-encoding = "2"
+
+# libgit2, vendored and built from source — linked rather than spawned, since
+# iOS forbids child processes. `libgit2-sys` uses the system TLS stack on any
+# target containing "apple". `vendored-openssl` satisfies git2-rs's openssl-sys
+# gate on non-macOS unix targets (iOS included, even though libgit2 will not use
+# it there). SSH is off: GitHub is reached over HTTPS with a token. This is the
+# configuration idlewild-editor ships on iPad.
+git2 = { version = "0.21", default-features = false, features = [
+    "vendored-libgit2",
+    "vendored-openssl",
+    "https",
+] }
+
+# GitHub's REST API, the AI providers, and the live-preview proxy. rustls with
+# ring cross-compiles to aarch64-apple-ios without CMake; the platform verifier
+# checks certificates against the system trust store (Keychain on Apple
+# targets), so a corporate or user-installed root works as it does in Safari.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "json", "gzip"] }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
+# Dependencies optimised even in debug builds: `tauri ios build --debug` is the
+# build that ends up on the iPad, and libgit2's pack indexing at opt-level 0 is
+# slow enough to notice on a large clone.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

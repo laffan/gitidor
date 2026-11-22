@@ -1,0 +1,167 @@
+# gitidor
+
+A columnar markdown editor for static sites that live in GitHub repositories,
+for macOS, iPadOS and iOS. Tauri v2, with libgit2 linked in so the same git
+works on an iPad, where an app cannot run `git`.
+
+Add a repository once — it is cloned to the device — choose the folders your
+posts live in, and from then on you write, commit, switch branches and preview
+without a network. Only pulling and pushing need one.
+
+```
+┌──────────────┬────────────────┬───────────────────────────────────────────┐
+│ Repositories │ Files          │  posts / 2026-11-02--marettimo.md   Saved 👁 │
+│              │                │                                           │
+│ ┌──────────┐ │ ▾ posts      ☰ │   ---                                     │
+│ │ blog     │ │   Marettimo  ● │   title: Marettimo                        │
+│ │ ⑂ main   │ │   Lisboa       │   ---                                     │
+│ │ 1 change │ │   Thrum        │   The ferry from Trapani takes an hour…   │
+│ │ ↓ ✓ ↑ ⋯  │ │                │   ![](/images/blog/harbour.jpg)           │
+│ └──────────┘ │ + Add Folder   │   ┌─────────── the image ──────────┐      │
+│ + Add Repo   │                │                                           │
+│ ⚙            │                │   101 words          blog…/blog/-marettimo/│
+└──────────────┴────────────────┴───────────────────────────────────────────┘
+```
+
+## The three columns
+
+**Repositories.** One card per repository: its branch (tap to switch or make
+one), how many files have changed, how many commits are ahead of or behind
+GitHub, and the last commit. The selected card has Pull, Commit, Push, Open
+site and a menu with the repository's settings, AI site detection, Open on
+GitHub and Remove. **Add Repo** is always last. **Settings** is the gear in the
+lower-left corner.
+
+**Files.** The folders you chose, each listing its markdown files newest
+first, with titles from frontmatter and a dot for anything changed. The ☰
+across from a folder's name has New post, Refresh and Remove. **Add Folder** is
+always last; it lists the clone's folders with their markdown counts and marks
+the ones the site's config says hold posts.
+
+**Editor.** CodeMirror 6, set up the way [hush](https://github.com/laffan/hush)
+sets it up for prose, with every hush text-editing shortcut on hush's keys
+(sentence and paragraph selection and movement, join lines, move lines,
+⌘D instance stepping, ⌥-click multi-cursor, bold/italic/highlight/strike/
+quote/comment). Frontmatter in YAML (`---`) or TOML (`+++`) is kept out of the
+markdown parser and shown dimmed, folded, or plain. Images a post names are
+drawn under the line that names them. Paste or drop an image to save it into
+the repository where the site expects images and insert a reference to it.
+Saving is automatic.
+
+The 👁 button opens the **preview** beside the text:
+
+- **Draft** renders the file as typed, offline, with images resolved the same
+  way the editor resolves them, optionally with the site's own stylesheets.
+- **Live** loads the published site through a small proxy. As you click
+  around, it works out which source file each page came from and offers
+  **Edit this post**. It shows what is pushed and built, and says so when the
+  open file has changes that are not on it yet.
+
+## Site structure
+
+A post says `![](/images/blog/a.jpg)`; the file is often somewhere else —
+in the blog this was written for, `public/blog-images/a.jpg`, because
+`.eleventy.js` copies one to the other at build time. Each repository gets a
+**site profile**: which folders hold posts, the URL pattern each is published
+at, and where URL prefixes live in the repository. It is read from the
+generator's own config when the repository is added (Eleventy, Jekyll, Hugo
+and Astro are understood directly), can be worked out again by an AI provider
+when the config is unusual, and can be read and edited by hand in the
+repository's settings. Inline images, the draft preview, published URLs and
+"Edit this post" all come from it.
+
+For `laffan/blog.natelaffan.com` the rule-based reading gives `posts` →
+`/blog/{fileSlug}/` (so `posts/2010-03-14--crickets.md` is
+`/blog/-crickets/`, which is what the live site serves) and `/images/blog/` →
+`public/blog-images/`, with `https://blog.natelaffan.com/` found from the
+`CNAME` file.
+
+## Setting up
+
+```sh
+npm install
+npm run tauri dev        # the app, on this machine
+npm run dev              # the interface alone in a browser, against an in-memory mock
+npm test                 # frontend tests
+cd src-tauri && cargo test               # backend tests
+cargo test -- --ignored                  # also the ones that need the network
+```
+
+On Linux the Tauri build needs the WebKitGTK development packages
+(`libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`).
+
+**macOS:** `npm run build:macos` makes an app bundle in
+`src-tauri/target/release/bundle/macos/`.
+
+**iPad and iPhone:** Xcode with the iOS SDK, and
+`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`. Then
+`npm run ios:init` once (it runs `tauri ios init` and two patches from
+idlewild-editor: the UIScene manifest iOS 27 requires, and `-lz -liconv` on the
+link line, which libgit2 needs on iOS and which the Xcode link does not get
+from Cargo). After that `npm run ios:dev` or `npm run build:ios`. Set your
+development team in `src-tauri/tauri.conf.json` (`bundle.iOS.developmentTeam`)
+or `APPLE_DEVELOPMENT_TEAM`.
+
+**GitHub:** Settings → GitHub takes a fine-grained personal access token with
+**Contents: Read and write** on the repositories you edit (and Pages: read if
+you want custom domains found automatically). Public repositories clone without
+one; pushing needs it. The token stays in Rust and is never sent to the
+webview.
+
+**AI (optional):** Settings → AI takes an Anthropic or OpenAI key. Test lists
+the models the key can use; Anthropic defaults to Claude Opus 5.5. The key is
+used only when you ask for a repository's structure to be worked out, and what
+is sent is the file listing, the config files and the first lines of a few
+posts.
+
+## Shortcuts
+
+All of hush's text-editing shortcuts, plus: ⌘S save now, ⇧⌘P preview,
+⌘\ hide the side columns, ⇧⌘K commit, ⌘N new post, ⌘, settings. The full
+list is in Settings → Shortcuts.
+
+## What has and has not been run
+
+Developed on Linux. Verified there:
+
+- **Rust tests** — git against local bare repositories (clone, commit chosen
+  files, push, fast-forward and merging pulls, refusing a conflicting merge
+  without touching anything, never overwriting an uncommitted edit, branches,
+  discard, diff), site detection, URL patterns, path guards, the preview
+  scheme. Network tests (`--ignored`): a real HTTPS clone and fetch through
+  libgit2, GitHub's API for a real repository (including finding a custom
+  domain from `CNAME`), and the live-preview proxy against the real blog.
+- **Frontend tests** — asset resolution, frontmatter in both formats, new-post
+  naming and templates.
+- **In Chromium against the mock** — every column and sheet at desktop, iPad
+  and iPhone widths, light and dark; hush's shortcuts acting on text; autosave,
+  the commit sheet and new posts.
+- **The Tauri app itself, built and run on Linux (WebKitGTK)** with a copy of
+  the blog: the folder listing, opening posts, inline images through
+  `gitidor://local`, the draft preview, the live preview through the proxy,
+  following a link in the live site and opening its source with *Edit this
+  post*, and an edit committed and pushed through libgit2 (to a local bare
+  repository, not GitHub).
+
+**Not yet built or run on macOS, an iPad or an iPhone.** The iOS pieces
+follow what idlewild-editor ships, but nothing here has been through Xcode.
+See [docs/known-gaps.md](docs/known-gaps.md).
+
+## Where things are
+
+See [docs/architecture.md](docs/architecture.md).
+
+## Credits
+
+- Editing commands and markdown extensions: ported from
+  [hush](https://github.com/laffan/hush) (`src/editor/hush/`).
+- GitHub and libgit2 approach, error wording, and the iOS build patches:
+  adapted from [idlewild-editor](https://github.com/laffan/idlewild-editor).
+- The preview is not [snorkle](https://github.com/laffan/snorkle): snorkle
+  hosts its own WKWebViews from Rust, which is far more browser than a
+  preview needs and would mean an unverified objc2 layer here. The live
+  preview borrows its idea of keeping page content away from the app (a
+  sandboxed frame with an opaque origin) instead.
+- Type: IBM Plex Mono and Sans, Source Serif 4. iA asks other editors not to
+  bundle or default to the iA Writer fonts, so they are offered only by name,
+  for people who have installed them.
