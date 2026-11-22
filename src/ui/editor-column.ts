@@ -14,6 +14,7 @@ import { assetUrl } from "./asset-url";
 import { resizeHandle } from "./resize";
 import { setEditor } from "./editor-ref";
 import { mediaView } from "./media-view";
+import { uploadLinkerFor } from "./upload-peek";
 import { log } from "../lib/log";
 import { locate } from "../lib/locate";
 
@@ -90,6 +91,7 @@ export function editorColumn(): HTMLElement {
         text: f.text,
         resolveImage: repo ? (src) => assetUrl(repo, f.path, src) : null,
         importImage: repo ? (file) => importImage(repo.id, f.path, file) : null,
+        uploadLinker: repo ? uploadLinkerFor(repo.id, f.path) : null,
       });
       requestAnimationFrame(() => editor!.focus());
     } else if (editor!.view.state.doc.toString() !== f.text) {
@@ -145,7 +147,11 @@ export function editorColumn(): HTMLElement {
     if (!store.viewing) load();
   });
   on("save", drawSave);
-  on("files", drawWhere);
+  on("files", () => {
+    drawWhere();
+    // An upload added or deleted may change which frontmatter values have buttons.
+    if (store.openFile) editor?.refreshUploads();
+  });
   on("preview", () => previewBtn.classList.toggle("on", store.preview.open));
   on("settings", () => editor?.setAppearance(appearance()));
   const col: HTMLElement = h(

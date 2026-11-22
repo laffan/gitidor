@@ -80,6 +80,7 @@ function item(repo: RepoRecord, folder: string, f: UploadEntry, view: View): HTM
           dot,
         );
   el.title = `${f.path}\n${actions.size(f.size)}`;
+  el.dataset.path = f.path;
   el.draggable = true;
   el.addEventListener("dragstart", (e) => {
     e.dataTransfer?.setData("text/plain", markdownFor(repo, f));
@@ -98,6 +99,28 @@ function item(repo: RepoRecord, folder: string, f: UploadEntry, view: View): HTM
   el.classList.toggle("active", viewing);
   tiles.set(key, el);
   return el;
+}
+
+/**
+ * Bring a file into view in the Files column: its folder opened, every file
+ * drawn, scrolled to and briefly marked. `showColumn` opens the Files column
+ * if it is hidden.
+ */
+export function revealUpload(repoId: string, folder: string, path: string, showColumn = false) {
+  const key = folderKey(repoId, folder);
+  store.collapsed.delete(key);
+  shownCount.set(key, Number.MAX_SAFE_INTEGER);
+  if (showColumn && !store.layout.files) actions.setLayout({ files: true });
+  emit("files");
+  requestAnimationFrame(() => {
+    const el = document.querySelector<HTMLElement>(`.upload-folder [data-path="${CSS.escape(path)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "nearest" });
+    el.classList.remove("flash");
+    void el.offsetWidth;
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1400);
+  });
 }
 
 export function uploadSection(repo: RepoRecord, folder: string): HTMLElement {

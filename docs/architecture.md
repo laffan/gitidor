@@ -29,11 +29,14 @@ src/                         the interface (TypeScript, no framework)
   ui/upload-menu.ts          an upload's menu and markdown; which files are pictures, video, sound
   ui/media-view.ts           a picture, video or sound shown in the editor column
   ui/editor-ref.ts           the editor handle, for code that inserts text without the column
+  ui/upload-peek.ts          what those frontmatter buttons match, their hover preview, where a click goes
+  lib/upload-refs.ts         file names on a frontmatter line → the upload each one means
   editor/editor.ts           CodeMirror setup
   editor/keymap.ts           the shortcut table (also drives Settings → Shortcuts)
   editor/frontmatter-ext.ts  keeps frontmatter out of the markdown parser; dim/fold;
                              marks lines the YAML/TOML parser rejects
   editor/images.ts           inline image widgets
+  editor/upload-refs-ext.ts  buttons after frontmatter values that name uploads
   editor/hush/               ported from hush, kept close to the original
   mock/mock-backend.ts       in-memory backend for browser development
 
@@ -175,6 +178,19 @@ still be rebuilding. It is redrawn on every status change and every page load.
 The host-based form is how WebKit hands custom schemes to the app on macOS,
 iOS and Linux. Windows and Android rewrite them to `http://gitidor.localhost`,
 which loses the host — not a target platform, but noted.
+
+## Frontmatter that names uploads
+
+`lib/upload-refs.ts` reads each frontmatter line after its key (or list dash):
+quoted strings whole, otherwise runs between spaces, commas and brackets,
+keeping those that end in `.ext`. Each is matched to an upload first as the
+site would resolve it (`resolveAsset`: the asset map for root-relative URLs,
+the post's folder for relative paths), then by file name, preferring the
+upload whose path shares the most trailing folders with what was written. A
+URL on another host never matches by name. The editor gets the matcher and
+the hover and click handlers through a facet, and is told to look again
+(`refreshUploads`) whenever a listing changes, so adding a file or a folder
+brings its buttons without reopening the post. Folded frontmatter shows none.
 
 ## Word-level changes
 

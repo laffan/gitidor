@@ -72,7 +72,12 @@ sets it up for prose, with every hush text-editing shortcut on hush's keys
 ⌘D instance stepping, ⌥-click multi-cursor, bold/italic/highlight/strike/
 quote/comment). Frontmatter in YAML (`---`) or TOML (`+++`) is kept out of the
 markdown parser and shown dimmed, folded, or plain; a frontmatter line the
-YAML (or TOML) parser rejects turns red, with the reason on hover. Images a post names are
+YAML (or TOML) parser rejects turns red, with the reason on hover. A
+frontmatter value that names a file in an upload folder (`image:
+/images/blog/harbour.jpg`, `attachments: [menu.pdf]`) gets a small button
+after it: resting the pointer on it previews the file, clicking it opens the
+file (pictures, video and sound in the viewer) and finds it in its upload
+folder. Images a post names are
 drawn under the line that names them. Paste or drop an image to save it into
 the repository where the site expects images and insert a reference to it.
 Saving is automatic.

@@ -40,6 +40,8 @@ title: Marettimo
 date: 2026-11-02
 summary: An island at the end of the ferry line
 tags: [travel]
+image: /images/blog/marettimo-harbour.jpg
+attachments: [harbour-waves.wav, "reading-list.pdf"]
 ---
 The ferry from Trapani takes an hour and a half, and for the last twenty minutes the island sits on the horizon like a sleeping animal.
 

@@ -554,6 +554,22 @@ html.platform-macos #app.hide-repos.hide-files .editor-bar {
   background: var(--accent-soft);
 }
 
+/* Found from a frontmatter button: marked for a moment. */
+.upload-tile.flash,
+.upload-row.flash {
+  animation: upload-flash 1.3s ease;
+}
+
+@keyframes upload-flash {
+  0%,
+  45% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
 .upload-tile .thumb {
   aspect-ratio: 1;
   width: 100%;

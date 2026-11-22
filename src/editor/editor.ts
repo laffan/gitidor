@@ -18,6 +18,7 @@ import { wrapOnSelection } from "./hush/wrap-on-selection.js";
 import { editorKeymap } from "./keymap";
 import { FrontmatterBlock, frontmatterDecorations, frontmatterMode, type FrontmatterMode } from "./frontmatter-ext";
 import { imageResolver, inlineImages, inlineImagesOn, type ImageResolver } from "./images";
+import { refreshUploadRefs, uploadLinker, uploadRefs, type UploadLinker } from "./upload-refs-ext";
 
 const style = HighlightStyle.define([
   { tag: tags.heading, fontWeight: "700" },
@@ -71,6 +72,8 @@ export interface EditorFile {
   resolveImage: ImageResolver | null;
   /** Save pasted or dropped image files; answers the markdown to insert. */
   importImage: ((file: File) => Promise<string>) | null;
+  /** Which frontmatter values name uploads, and what their buttons do. */
+  uploadLinker?: UploadLinker | null;
 }
 
 export interface EditorHandle {
@@ -82,6 +85,8 @@ export interface EditorHandle {
   focus(): void;
   /** Put the caret at `pos` and scroll it to the middle of the view. */
   revealAt(pos: number): void;
+  /** The upload folders changed: look for frontmatter that names them again. */
+  refreshUploads(): void;
 }
 
 export function createEditor(host: HTMLElement, onChange: (text: string) => void, appearance: EditorAppearance): EditorHandle {
@@ -129,11 +134,12 @@ export function createEditor(host: HTMLElement, onChange: (text: string) => void
     wrapOnSelection,
     frontmatterDecorations(),
     inlineImages(),
+    uploadRefs(),
     Prec.highest(keymap.of(editorKeymap())),
     keymap.of([...baseKeymap, ...historyKeymap, ...searchKeymap]),
     placeholder("Start writing…"),
     look.of(lookExt(appearance)),
-    fileConf.of(imageResolver.of(current?.resolveImage ?? null)),
+    fileConf.of([imageResolver.of(current?.resolveImage ?? null), uploadLinker.of(current?.uploadLinker ?? null)]),
     EditorView.updateListener.of((u) => {
       if (u.docChanged && !quiet) onChange(u.state.doc.toString());
     }),
@@ -181,6 +187,9 @@ export function createEditor(host: HTMLElement, onChange: (text: string) => void
       const at = Math.max(0, Math.min(pos, view.state.doc.length));
       view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }), userEvent: "select" });
       view.focus();
+    },
+    refreshUploads() {
+      view.dispatch({ effects: refreshUploadRefs.of(null) });
     },
   };
 }
