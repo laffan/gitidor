@@ -83,6 +83,8 @@ const PATHS: Record<string, string> = {
   terminal: "M4 5h16v14H4z M7.5 9.5l3 2.5-3 2.5 M12.5 15h4",
   copy: "M9 9h11v11H9z M5 15H4V4h11v1",
   cloudoff: "M3 3l18 18 M8 6.5A6 6 0 0 1 17.7 10H18a4 4 0 0 1 2.6 7 M16 18H7a5 5 0 0 1-1.7-9.7",
+  film: "M4 4h16v16H4z M8 4v16 M16 4v16 M4 8h4 M4 12h4 M4 16h4 M16 8h4 M16 12h4 M16 16h4",
+  music: "M9 18V5l12-2v13 M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M18 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
   // snorkle's night vision: an eye with a spark over it.
   night: "M2.5 14C4.8 10 8.1 8 12 8s7.2 2 9.5 6c-2.3 4-5.6 6-9.5 6s-7.2-2-9.5-6Z M12 16.75a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5Z M18.5 2.5v4 M16.5 4.5h4",
 };

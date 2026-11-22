@@ -207,6 +207,83 @@
   color: var(--text-3);
 }
 
+/* ── an upload, shown in place of the post (media-view.ts) ── */
+
+.col-editor.viewing .editor-split,
+.col-editor.viewing .save-state,
+.col-editor.viewing .preview-toggle,
+.col-editor.viewing .post-info,
+.col-editor:not(.viewing) .media-foot {
+  display: none;
+}
+
+.media-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.media-actions .btn {
+  margin-right: 4px;
+}
+
+.media-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-files);
+}
+
+.media-stage {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  position: relative;
+}
+
+.media-stage img,
+.media-stage video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: var(--shadow-card);
+}
+
+/* Transparent pictures over a quiet checkerboard. */
+.media-stage img {
+  background: repeating-conic-gradient(var(--bg-active) 0 25%, transparent 0 50%) 50% / 16px 16px;
+}
+
+.media-stage video {
+  background: #000;
+}
+
+.media-audio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: min(440px, 100%);
+  color: var(--text-3);
+}
+
+.media-audio .name {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.media-audio audio {
+  width: 100%;
+}
+
 /* ── preview ── */
 
 .preview {

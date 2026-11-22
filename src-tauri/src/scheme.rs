@@ -2,7 +2,9 @@
 //!
 //! - `gitidor://local.<id>/<path>` serves a file from the clone, as it is on
 //!   disk now. Inline images in the editor and the draft preview load through
-//!   it, which is what makes both work offline.
+//!   it, which is what makes both work offline, and so do upload folders'
+//!   thumbnails and the media viewer. It answers byte ranges: WebKit plays
+//!   video and audio from a custom scheme only when it can ask for parts.
 //! - `gitidor://live.<id>/<path>` fetches `<path>` from the repository's
 //!   public site and hands it back with one small script added. The script
 //!   tells the app which page is showing (so the preview can offer "Edit this
@@ -27,8 +29,9 @@ pub fn handle(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let host = uri.host().unwrap_or_default().to_string();
     let path = uri.path().to_string();
     let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
+    let range = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).map(str::to_string);
     let result = match host.split_once('.') {
-        Some(("local", id)) => local(id, &path),
+        Some(("local", id)) => local(id, &path, range.as_deref()),
         Some(("live", id)) => live(id, &path, &query),
         _ => Err((StatusCode::NOT_FOUND, format!("Unknown preview address {host}"))),
     };
@@ -37,7 +40,7 @@ pub fn handle(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
 
 type Outcome = Result<Response<Vec<u8>>, (StatusCode, String)>;
 
-fn local(id: &str, path: &str) -> Outcome {
+fn local(id: &str, path: &str, range: Option<&str>) -> Outcome {
     let id = checked_id(id).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let root = clone_dir(id).map_err(|e| (StatusCode::NOT_FOUND, e))?;
     let decoded = percent_encoding::percent_decode_str(path).decode_utf8_lossy().to_string();
@@ -46,12 +49,61 @@ fn local(id: &str, path: &str) -> Outcome {
     if file.is_dir() {
         file = file.join("index.html");
     }
-    let bytes = std::fs::read(&file).map_err(|_| {
-        let _scope = crate::events::scope(id);
-        crate::events::warn("preview", format!("Not in the repository: {decoded}"));
-        (StatusCode::NOT_FOUND, format!("{decoded} is not in this repository"))
-    })?;
-    Ok(respond(StatusCode::OK, mime_for(&decoded), bytes, "no-cache"))
+    serve_file(&file, &decoded, range).inspect_err(|(status, _)| {
+        if *status == StatusCode::NOT_FOUND {
+            let _scope = crate::events::scope(id);
+            crate::events::warn("preview", format!("Not in the repository: {decoded}"));
+        }
+    })
+}
+
+/// The most one range request is answered with. A video player asks for
+/// "the rest" and takes what comes; it asks again from where that ends.
+const MAX_RANGE: u64 = 4 * 1024 * 1024;
+
+/// A file, whole or (with a `Range` header) the part asked for.
+pub fn serve_file(file: &std::path::Path, name: &str, range: Option<&str>) -> Outcome {
+    use std::io::{Read, Seek, SeekFrom};
+    let missing = || (StatusCode::NOT_FOUND, format!("{name} is not in this repository"));
+    let mime = mime_for(name);
+    let Some(range) = range else {
+        let bytes = std::fs::read(file).map_err(|_| missing())?;
+        return Ok(respond_with(StatusCode::OK, mime, bytes, "no-cache", &[(header::ACCEPT_RANGES, "bytes".into())]));
+    };
+    let mut f = std::fs::File::open(file).map_err(|_| missing())?;
+    let len = f.metadata().map_err(|_| missing())?.len();
+    let Some((start, end)) = parse_range(range, len) else {
+        return Ok(respond_with(StatusCode::RANGE_NOT_SATISFIABLE, mime, Vec::new(), "no-cache", &[(header::CONTENT_RANGE, format!("bytes */{len}"))]));
+    };
+    let end = end.min(start + MAX_RANGE - 1);
+    let mut body = vec![0; (end - start + 1) as usize];
+    f.seek(SeekFrom::Start(start)).and_then(|_| f.read_exact(&mut body)).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{name} could not be read: {e}")))?;
+    Ok(respond_with(
+        StatusCode::PARTIAL_CONTENT,
+        mime,
+        body,
+        "no-cache",
+        &[(header::ACCEPT_RANGES, "bytes".into()), (header::CONTENT_RANGE, format!("bytes {start}-{end}/{len}"))],
+    ))
+}
+
+/// The first range of a `Range: bytes=…` header, as inclusive offsets into a
+/// file of `len` bytes, or `None` when it cannot be satisfied.
+pub fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
+    let spec = header.trim().strip_prefix("bytes=")?;
+    let (a, b) = spec.split(',').next()?.trim().split_once('-')?;
+    if len == 0 {
+        return None;
+    }
+    let (start, end) = if a.is_empty() {
+        let n: u64 = b.trim().parse().ok().filter(|n| *n > 0)?;
+        (len.saturating_sub(n), len - 1)
+    } else {
+        let start: u64 = a.trim().parse().ok()?;
+        let end = if b.trim().is_empty() { len - 1 } else { b.trim().parse::<u64>().ok()?.min(len - 1) };
+        (start, end)
+    };
+    (start <= end && start < len).then_some((start, end))
 }
 
 const MAX_BODY: u64 = 32 * 1024 * 1024;
@@ -202,15 +254,21 @@ fn resolve(current: &str, location: &str) -> String {
 }
 
 fn respond(status: StatusCode, mime: &str, body: Vec<u8>, cache: &str) -> Response<Vec<u8>> {
-    Response::builder()
+    respond_with(status, mime, body, cache, &[])
+}
+
+fn respond_with(status: StatusCode, mime: &str, body: Vec<u8>, cache: &str, extra: &[(header::HeaderName, String)]) -> Response<Vec<u8>> {
+    let mut builder = Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, mime)
         .header(header::CACHE_CONTROL, cache)
         // The preview frame has an opaque origin; fonts and module scripts
         // from it are cross-origin requests and need this to load.
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .body(body)
-        .unwrap_or_else(|_| Response::new(Vec::new()))
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+    for (name, value) in extra {
+        builder = builder.header(name, value.as_str());
+    }
+    builder.body(body).unwrap_or_else(|_| Response::new(Vec::new()))
 }
 
 fn leaving_page(url: &str) -> Response<Vec<u8>> {
@@ -255,9 +313,17 @@ pub fn mime_for(path: &str) -> &'static str {
         "woff2" => "font/woff2",
         "ttf" => "font/ttf",
         "otf" => "font/otf",
-        "mp4" => "video/mp4",
+        "mp4" | "m4v" => "video/mp4",
         "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "ogv" => "video/ogg",
         "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "opus" => "audio/opus",
+        "flac" => "audio/flac",
         "pdf" => "application/pdf",
         _ => "application/octet-stream",
     }
@@ -334,6 +400,48 @@ mod tests {
         let redirected = handle(req("gitidor://live.abc123/blog/-crickets"));
         let text = String::from_utf8_lossy(redirected.body());
         assert!(text.contains(r#"<base href="gitidor://live.abc123/blog/-crickets/">"#), "{}", &text[..text.len().min(400)]);
+    }
+
+    #[test]
+    fn ranges_are_read_the_way_media_players_ask() {
+        assert_eq!(parse_range("bytes=0-", 100), Some((0, 99)));
+        assert_eq!(parse_range("bytes=10-19", 100), Some((10, 19)));
+        assert_eq!(parse_range("bytes=90-500", 100), Some((90, 99)));
+        assert_eq!(parse_range("bytes=-10", 100), Some((90, 99)));
+        assert_eq!(parse_range("bytes=0-1, 5-6", 100), Some((0, 1)));
+        assert_eq!(parse_range("bytes=100-", 100), None);
+        assert_eq!(parse_range("bytes=5-2", 100), None);
+        assert_eq!(parse_range("items=0-1", 100), None);
+        assert_eq!(parse_range("bytes=0-", 0), None);
+    }
+
+    #[test]
+    fn a_file_is_served_whole_or_in_parts() {
+        let dir = std::env::temp_dir().join(format!("gitidor-range-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("clip.mp4");
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(10_000).collect();
+        std::fs::write(&file, &bytes).unwrap();
+
+        let whole = serve_file(&file, "clip.mp4", None).unwrap();
+        assert_eq!(whole.status(), 200);
+        assert_eq!(whole.headers()["accept-ranges"], "bytes");
+        assert_eq!(whole.headers()["content-type"], "video/mp4");
+        assert_eq!(whole.body().len(), 10_000);
+
+        let part = serve_file(&file, "clip.mp4", Some("bytes=1000-1999")).unwrap();
+        assert_eq!(part.status(), 206);
+        assert_eq!(part.headers()["content-range"], "bytes 1000-1999/10000");
+        assert_eq!(part.body().as_slice(), &bytes[1000..2000]);
+
+        let rest = serve_file(&file, "clip.mp4", Some("bytes=9990-")).unwrap();
+        assert_eq!(rest.headers()["content-range"], "bytes 9990-9999/10000");
+        assert_eq!(rest.body().len(), 10);
+
+        let past = serve_file(&file, "clip.mp4", Some("bytes=20000-")).unwrap();
+        assert_eq!(past.status(), 416);
+        assert_eq!(past.headers()["content-range"], "bytes */10000");
+        assert_eq!(serve_file(&dir.join("missing.mp4"), "missing.mp4", None).unwrap_err().0, 404);
     }
 
     #[test]

@@ -43,6 +43,11 @@ Most important first.
 - **Uploads cross IPC as base64**, one file at a time, so a large video is
   held in memory twice on its way to disk. Files over 100 MB are refused
   (GitHub's limit).
+- **Video and sound in the viewer through `gitidor://`.** The range
+  responses are unit-tested and the viewer played sound in Chromium (from a
+  data URL in the mock); playing a video from the clone has not been seen in
+  WebKitGTK or WKWebView. Formats are WebKit's: WebM and Ogg may not play on
+  every Apple version, and then the viewer says so.
 - **Dropping files from Finder** onto an upload folder (or into the editor) is
   verified only in Chromium. Tauri's own drag-and-drop handler is on by
   default and may take file drops before the page sees them; the + button

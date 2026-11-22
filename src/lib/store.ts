@@ -4,7 +4,7 @@
 
 import type { FileEntry, RepoRecord, RepoStatus, SecretStatus, Settings, UploadEntry } from "./types";
 
-export type Topic = "repos" | "status" | "files" | "file" | "settings" | "secrets" | "layout" | "preview" | "save" | "log" | "console";
+export type Topic = "repos" | "status" | "files" | "file" | "settings" | "secrets" | "layout" | "preview" | "save" | "log" | "console" | "viewer";
 
 export interface OpenFile {
   repoId: string;
@@ -57,6 +57,9 @@ export const store = {
   collapsed: new Set<string>(),
   filter: "",
   openFile: null as OpenFile | null,
+  /** An upload shown in the editor column in place of the post, if any. The
+   *  open post stays open underneath. */
+  viewing: null as { repoId: string; folder: string; path: string } | null,
   // The repositories column starts hidden; the Files column's sidebar button
   // and ⌘\ bring it back.
   layout: { repos: false, files: true, drawer: false, pane: "repos" as Pane },

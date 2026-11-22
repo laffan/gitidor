@@ -58,6 +58,10 @@ function applyStatus(id: string, status: RepoStatus) {
 export async function selectRepo(id: string, opts: { showFiles?: boolean } = {}) {
   const changed = store.activeRepoId !== id;
   store.activeRepoId = id;
+  if (changed && store.viewing && store.viewing.repoId !== id) {
+    store.viewing = null;
+    emit("viewer");
+  }
   if (opts.showFiles) store.layout.pane = "files";
   store.layout.drawer = false;
   emit("repos", "layout");
@@ -191,6 +195,20 @@ export function size(bytes: number): string {
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let statusTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** Show a picture, video or sound from an upload folder in the editor column. */
+export function viewUpload(repoId: string, folder: string, path: string) {
+  store.viewing = { repoId, folder, path };
+  store.layout.pane = "editor";
+  emit("viewer", "layout", "files");
+}
+
+/** Back to the post (or the empty editor) from an upload. */
+export function closeViewer() {
+  if (!store.viewing) return;
+  store.viewing = null;
+  emit("viewer", "files");
+}
+
 export async function openFile(repoId: string, path: string) {
   await flushSave();
   try {
@@ -198,7 +216,8 @@ export async function openFile(repoId: string, path: string) {
     log.debug("files", `Opened ${path}`, repoId);
     store.openFile = { repoId, path, saved: text, text, state: "saved", error: null };
     store.layout.pane = "editor";
-    emit("file", "layout", "files", "save");
+    store.viewing = null;
+    emit("file", "layout", "files", "save", "viewer");
   } catch (e) {
     toast((e as Error).message, "error");
   }

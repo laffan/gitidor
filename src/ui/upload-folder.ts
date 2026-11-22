@@ -1,21 +1,18 @@
 // An upload folder in the Files column: every file in it, as thumbnails (the
 // default) or a list, with a + beside the folder's menu that picks files and
-// copies them in. Files can also be dropped on the folder. A file's menu (a
-// click, or a right-click) inserts it into the open post, copies its
-// markdown, discards or deletes it; dragging one into the editor inserts it.
+// copies them in. Files can also be dropped on the folder. Clicking a picture,
+// video or sound shows it in the editor column (media-view.ts); clicking
+// anything else, or right-clicking, opens its menu (upload-menu.ts).
+// Dragging one into the editor inserts its markdown.
 
 import { h, icon, iconButton } from "../lib/dom";
 import { emit, folderKey, store } from "../lib/store";
 import * as actions from "../lib/actions";
-import { imageReference } from "../lib/site";
 import type { RepoRecord, UploadEntry } from "../lib/types";
 import { assetUrl } from "./asset-url";
-import { getEditor } from "./editor-column";
 import { openMenu } from "./menu";
 import { confirmModal } from "./modal";
-import { toast } from "./toast";
-
-const IMAGE = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/i;
+import { markdownFor, mediaKind, uploadMenu } from "./upload-menu";
 const VIEW_KEY = "gitidor.uploadViews";
 const PAGE = 300;
 
@@ -50,79 +47,25 @@ const shownCount = new Map<string, number>();
  */
 const tiles = new Map<string, HTMLElement>();
 
-/** The markdown that puts this file in the open post (or, with none open, at the site root). */
-function markdownFor(repo: RepoRecord, f: UploadEntry): string {
-  const post = store.openFile?.repoId === repo.id ? store.openFile.path : "";
-  const ref = imageReference(repo.site ?? null, post, f.path);
-  const target = ref.includes(" ") ? `<${ref}>` : ref;
-  const label = f.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
-  return IMAGE.test(f.name) ? `![${label}](${target})` : `[${label}](${target})`;
-}
-
-function insertIntoPost(repo: RepoRecord, f: UploadEntry) {
-  const editor = getEditor();
-  if (!editor || store.openFile?.repoId !== repo.id) return;
-  const view = editor.view;
-  const md = markdownFor(repo, f);
-  const at = view.state.selection.main;
-  view.dispatch({ changes: { from: at.from, to: at.to, insert: md }, selection: { anchor: at.from + md.length }, userEvent: "input.paste" });
-  view.focus();
-}
-
-function itemMenu(anchor: HTMLElement, repo: RepoRecord, folder: string, f: UploadEntry) {
-  const postOpen = store.openFile?.repoId === repo.id;
-  openMenu(anchor, [
-    { heading: f.name },
-    { label: "Insert into post", icon: "edit", disabled: !postOpen, title: postOpen ? undefined : "Open a post first", run: () => insertIntoPost(repo, f) },
-    {
-      label: "Copy markdown",
-      icon: "copy",
-      run: () => {
-        void navigator.clipboard?.writeText(markdownFor(repo, f)).then(
-          () => toast("Copied."),
-          () => toast("Could not reach the clipboard.", "error"),
-        );
-      },
-    },
-    ...(f.change
-      ? [
-          {
-            label: "Discard changes…",
-            icon: "undo",
-            run: async () => {
-              const what = f.change === "added" ? "This file is new; discarding deletes it." : "It goes back to how it was in the last commit.";
-              if (await confirmModal(`Discard changes to ${f.name}?`, what, "Discard", true)) await actions.discard(repo.id, f.path);
-            },
-          },
-        ]
-      : []),
-    { separator: true as const },
-    {
-      label: "Delete…",
-      icon: "trash",
-      danger: true,
-      run: async () => {
-        if (await confirmModal(`Delete ${f.name}?`, "The file is deleted here. Commit and push to remove it from the site too. Posts that use it will show it missing.", "Delete", true)) {
-          await actions.deleteFile(repo.id, f.path, folder, "upload");
-        }
-      },
-    },
-  ]);
-}
-
 function thumb(repo: RepoRecord, f: UploadEntry, size: number): HTMLElement {
-  if (IMAGE.test(f.name)) {
+  const kind = mediaKind(f.name);
+  if (kind === "image") {
     const url = assetUrl(repo, "", `/${f.path}`, true);
     if (url) return h("span", { class: "thumb" }, h("img", { src: url, alt: "", loading: "lazy", decoding: "async", draggable: false }));
   }
   const ext = /\.([^.]+)$/.exec(f.name)?.[1] ?? "";
-  return h("span", { class: "thumb" }, h("span", { class: "doc" }, icon("file", size), ext ? h("span", { class: "ext" }, ext.slice(0, 5)) : null));
+  const glyph = kind === "video" ? "film" : kind === "audio" ? "music" : "file";
+  return h("span", { class: "thumb" }, h("span", { class: "doc" }, icon(glyph, size), ext ? h("span", { class: "ext" }, ext.slice(0, 5)) : null));
 }
 
 function item(repo: RepoRecord, folder: string, f: UploadEntry, view: View): HTMLElement {
   const key = `${repo.id}:${f.path}:${f.modified}:${f.size}:${f.change}:${view}`;
+  const viewing = store.viewing?.repoId === repo.id && store.viewing.path === f.path;
   const cached = tiles.get(key);
-  if (cached) return cached;
+  if (cached) {
+    cached.classList.toggle("active", viewing);
+    return cached;
+  }
   const within = f.path.slice(folder.length + 1);
   const where = within !== f.name ? within.slice(0, -f.name.length - 1) : "";
   const dot = f.change ? h("span", { class: `dot ${f.change}`, title: f.change }) : null;
@@ -142,11 +85,17 @@ function item(repo: RepoRecord, folder: string, f: UploadEntry, view: View): HTM
     e.dataTransfer?.setData("text/plain", markdownFor(repo, f));
     if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
   });
-  el.addEventListener("click", () => itemMenu(el, repo, folder, f));
+  // Pictures, video and sound open in the editor column; anything else
+  // (a PDF, a zip) offers its menu. The menu is also a right-click away.
+  el.addEventListener("click", () => {
+    if (mediaKind(f.name)) actions.viewUpload(repo.id, folder, f.path);
+    else uploadMenu(el, repo, folder, f);
+  });
   el.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    itemMenu(el, repo, folder, f);
+    uploadMenu(el, repo, folder, f, { preview: true });
   });
+  el.classList.toggle("active", viewing);
   tiles.set(key, el);
   return el;
 }

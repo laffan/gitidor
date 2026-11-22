@@ -1,5 +1,6 @@
 // Column 3: the open file, the preview toggle above it, and a footer with the
-// word count and where the post is published.
+// word count and where the post is published. An upload clicked in the Files
+// column is shown here in place of the post (media-view.ts).
 
 import { h, iconButton } from "../lib/dom";
 import { emit, knownFile, on, repoById, store } from "../lib/store";
@@ -11,18 +12,29 @@ import { createEditor, type EditorAppearance, type EditorHandle } from "../edito
 import { previewPane } from "./preview";
 import { assetUrl } from "./asset-url";
 import { resizeHandle } from "./resize";
+import { setEditor } from "./editor-ref";
+import { mediaView } from "./media-view";
 import { log } from "../lib/log";
 import { locate } from "../lib/locate";
 
 let editor: EditorHandle | null = null;
-export const getEditor = () => editor;
+export { getEditor } from "./editor-ref";
 
 export function editorColumn(): HTMLElement {
   const title = h("div", { class: "doc-title", "data-tauri-drag-region": "" });
   const saveState = h("span", { class: "save-state", "aria-live": "polite" });
-  const previewBtn = iconButton("eye", "Preview (⇧⌘P)", () => togglePreview());
+  const previewBtn = iconButton("eye", "Preview (⇧⌘P)", () => togglePreview(), { class: "icon-btn preview-toggle" });
   const sidebarBtn = iconButton("sidebar", "Show or hide the side columns (⌘\\)", () => toggleColumns(), { class: "icon-btn not-phone" });
-  const backBtn = iconButton("back", "Files", () => actions.setLayout({ pane: "files" }), { class: "icon-btn only-phone" });
+  const backBtn = iconButton(
+    "back",
+    "Files",
+    () => {
+      actions.closeViewer();
+      actions.setLayout({ pane: "files" });
+    },
+    { class: "icon-btn only-phone" },
+  );
+  const media = mediaView();
   const host = h("div", { class: "editor-host" });
   const empty = h(
     "div",
@@ -38,9 +50,11 @@ export function editorColumn(): HTMLElement {
   });
   preview.el.appendChild(resizeHandle("preview"));
   const split = h("div", { class: "editor-split" }, host, preview.el);
-  const words = h("span");
-  const where = h("span");
-  const foot = h("div", { class: "editor-foot" }, words, where);
+  const words = h("span", { class: "post-info" });
+  const where = h("span", { class: "post-info" });
+  media.info.classList.add("media-foot");
+  media.link.classList.add("media-foot");
+  const foot = h("div", { class: "editor-foot" }, words, where, media.info, media.link);
 
   const appearance = (): EditorAppearance => ({
     spellcheck: store.settings.appearance.spellcheck,
@@ -51,6 +65,7 @@ export function editorColumn(): HTMLElement {
     actions.editText(text);
     countWords();
   }, appearance());
+  setEditor(editor);
   host.appendChild(empty);
   // For the browser harness in development; never in a build.
   if (import.meta.env.DEV) (window as unknown as { __gitidorEditor: EditorHandle }).__gitidorEditor = editor;
@@ -86,6 +101,16 @@ export function editorColumn(): HTMLElement {
     title.title = f.path;
     countWords();
     drawWhere();
+    drawViewer();
+  }
+
+  /** An upload shown in place of the post: its title over the column. */
+  function drawViewer() {
+    col?.classList.toggle("viewing", !!store.viewing);
+    if (store.viewing) {
+      title.replaceChildren(...media.title());
+      title.title = store.viewing.path;
+    }
   }
 
   function drawWhere() {
@@ -115,20 +140,25 @@ export function editorColumn(): HTMLElement {
   }
 
   on("file", load);
+  on("viewer", () => {
+    drawViewer();
+    if (!store.viewing) load();
+  });
   on("save", drawSave);
   on("files", drawWhere);
   on("preview", () => previewBtn.classList.toggle("on", store.preview.open));
   on("settings", () => editor?.setAppearance(appearance()));
-  load();
-  drawSave();
-
-  return h(
+  const col: HTMLElement = h(
     "section",
     { class: "column col-editor", "aria-label": "Editor" },
-    h("div", { class: "editor-bar", "data-tauri-drag-region": "" }, backBtn, sidebarBtn, title, saveState, previewBtn),
+    h("div", { class: "editor-bar", "data-tauri-drag-region": "" }, backBtn, sidebarBtn, title, saveState, previewBtn, media.actions),
     split,
+    media.el,
     foot,
   );
+  load();
+  drawSave();
+  return col;
 }
 
 /** Show or hide the preview. It opens on the live site, or on the draft

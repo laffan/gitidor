@@ -25,7 +25,10 @@ src/                         the interface (TypeScript, no framework)
   ui/resize.ts               draggable column edges, remembered per device
   ui/side-foot.ts            the footer under both side columns: Settings, night vision, console
   ui/rollback.ts             the Rollback sheet
-  ui/upload-folder.ts        an upload folder: thumbnails or list, the + picker, drops, file menu
+  ui/upload-folder.ts        an upload folder: thumbnails or list, the + picker, drops
+  ui/upload-menu.ts          an upload's menu and markdown; which files are pictures, video, sound
+  ui/media-view.ts           a picture, video or sound shown in the editor column
+  ui/editor-ref.ts           the editor handle, for code that inserts text without the column
   editor/editor.ts           CodeMirror setup
   editor/keymap.ts           the shortcut table (also drives Settings → Shortcuts)
   editor/frontmatter-ext.ts  keeps frontmatter out of the markdown parser; dim/fold;
@@ -128,7 +131,11 @@ the repository is in the host so a page's root-relative links stay inside the
 same repository:
 
 - `gitidor://local.<id>/<path>` — a file from the clone (inline images, draft
-  preview, site stylesheets). Path-guarded.
+  preview, upload thumbnails, the media viewer). Path-guarded. It answers a
+  `Range` header with 206 and `Content-Range` (at most 4 MB a request, read
+  from that offset rather than the whole file): WebKit's media players ask
+  for ranges and will not play video or sound from a custom scheme that does
+  not give them.
 - `gitidor://live.<id>/<path>` — the page from the public site, with absolute
   links to the site made root-relative and a short script added first in
   `<head>` that reports the page's path to the app, routes off-site links to

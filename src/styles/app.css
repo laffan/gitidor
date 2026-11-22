@@ -549,6 +549,11 @@ html.platform-macos #app.hide-repos.hide-files .editor-bar {
   background: var(--bg-hover);
 }
 
+.upload-tile.active,
+.upload-row.active {
+  background: var(--accent-soft);
+}
+
 .upload-tile .thumb {
   aspect-ratio: 1;
   width: 100%;

@@ -54,9 +54,12 @@ picks files to copy in (files can also be dropped on the folder); a name that
 is already there gets a number added rather than replacing the file. Uploads
 are new files like any other edit: they get a dot, and committing and pushing
 puts them on the site. GitHub refuses files over 100 MB, so those are left
-out. Clicking a file offers Insert into post (the markdown for it, with the
-URL the site serves it at), Copy markdown, and Delete; dragging one into the
-editor inserts it too. In the picker, the folders the site maps image URLs to
+out. Clicking a picture, video or sound file shows it in the editor column in
+place of the post, with its size, dimensions or length, and the address the
+site serves it at; **Insert into post** puts its markdown at the post's caret,
+and Esc or × goes back to the post. Clicking any other file (or right-clicking
+any file) opens its menu: Insert into post, Copy markdown, Delete. Dragging a
+file into the editor inserts it too. In the picker, the folders the site maps image URLs to
 are marked.
 
 Every column's edge can be dragged to change its width, and so can the line
