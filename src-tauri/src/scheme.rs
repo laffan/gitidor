@@ -235,7 +235,7 @@ fn html_attr(text: &str) -> String {
     text.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;")
 }
 
-fn resolve(current: &str, location: &str) -> String {
+pub(crate) fn resolve(current: &str, location: &str) -> String {
     if location.starts_with("http://") || location.starts_with("https://") {
         return location.to_string();
     }

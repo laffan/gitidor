@@ -13,6 +13,7 @@ mod frontmatter;
 mod github_api;
 mod gitops;
 mod http;
+mod livecheck;
 mod remote;
 mod repos;
 mod scheme;
@@ -24,7 +25,7 @@ mod store;
 use base64::Engine;
 use repos::RepoRecord;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use tauri::{AppHandle, Emitter, Manager};
 
 type Res<T> = Result<T, String>;
@@ -514,8 +515,9 @@ async fn import_asset(id: String, dir: String, name: String, data: String) -> Re
 
 // ── site structure ──────────────────────────────────────────────────────────
 
-/// Work out the site's structure again, by rule or with the AI provider.
-/// The result is saved on the repository either way.
+/// Work out the site's structure again, by rule or with the AI provider, and
+/// try its routes on the live site. The result is saved on the repository
+/// either way.
 #[tauri::command]
 async fn detect_site(id: String, use_ai: bool) -> Res<site::SiteProfile> {
     blocking(move || {
@@ -523,10 +525,17 @@ async fn detect_site(id: String, use_ai: bool) -> Res<site::SiteProfile> {
         let root = store::clone_dir(&id)?;
         let heuristic = site::detect(&root);
         let _scope = events::scope(&id);
+        let live = livecheck::Site::from_public_url(&record.public_url);
+        let unpublished = unpublished(&id);
         let profile = if use_ai {
-            reported("ai", ai::detect_site(&root, &heuristic, &record.folders).map_err(|e| secrets::redact(&e)))?
+            let live = live.as_ref().map(|site| ai::Live { site, unpublished: &unpublished });
+            reported("ai", ai::detect_site(&root, &heuristic, &record.folders, live).map_err(|e| secrets::redact(&e)))?
         } else {
-            heuristic
+            let mut profile = heuristic;
+            if let Some(site) = &live {
+                check_routes(&root, &mut profile, site, &record.folders, &unpublished);
+            }
+            profile
         };
         events::info(if use_ai { "ai" } else { "app" }, describe_profile(&profile));
         repos::update(&id, |r| r.site = Some(profile.clone()))?;
@@ -535,9 +544,57 @@ async fn detect_site(id: String, use_ai: bool) -> Res<site::SiteProfile> {
     .await
 }
 
+/// Try the saved profile's routes on the live site, without changing them.
+#[tauri::command]
+async fn check_site(id: String) -> Res<site::SiteProfile> {
+    blocking(move || {
+        let record = repos::get(&id)?;
+        let root = store::clone_dir(&id)?;
+        let _scope = events::scope(&id);
+        let mut profile = record.site.clone().unwrap_or_else(|| site::detect(&root));
+        let site = livecheck::Site::from_public_url(&record.public_url).ok_or("This repository has no public URL to check against. Add one in its settings.")?;
+        check_routes(&root, &mut profile, &site, &record.folders, &unpublished(&id));
+        repos::update(&id, |r| r.site = Some(profile.clone()))?;
+        Ok(profile)
+    })
+    .await
+}
+
+fn check_routes(root: &std::path::Path, profile: &mut site::SiteProfile, live: &livecheck::Site, folders: &[String], unpublished: &HashSet<String>) {
+    profile.checks = livecheck::check(root, profile, live, folders, unpublished);
+    profile.checked_at = store::now_ms();
+    for c in &profile.checks {
+        let line = format!("{} → {}: {}", c.folder, if c.pattern.is_empty() { "no route" } else { &c.pattern }, c.message);
+        match c.outcome.as_str() {
+            "ok" => events::info("preview", line),
+            "unchecked" => events::debug("preview", line),
+            _ => events::warn("preview", line),
+        }
+    }
+}
+
+/// Files GitHub does not have yet — changed here, or in commits not pushed —
+/// which the live site cannot show. Read under the git lock, then let go,
+/// so a commit is not held up by the live site's answers.
+fn unpublished(id: &str) -> HashSet<String> {
+    let lock = repos::git_lock(id);
+    let Ok(_guard) = lock.lock() else { return HashSet::new() };
+    let Ok(repo) = store::clone_dir(id).and_then(|d| gitops::open(&d)) else { return HashSet::new() };
+    let Ok(status) = gitops::status(&repo) else { return HashSet::new() };
+    status.changes.into_iter().map(|c| c.path).chain(status.unpushed).collect()
+}
+
 #[tauri::command]
 async fn save_site(id: String, profile: site::SiteProfile) -> Res<RepoRecord> {
     blocking(move || {
+        // A hand edit that cannot be read is refused with the reason, rather
+        // than saved without the route.
+        for route in &profile.routes {
+            let problems = site::route_problems(route);
+            if !problems.is_empty() {
+                return Err(format!("{}: {}", if route.folder.is_empty() { "(root)" } else { &route.folder }, problems.join("; ")));
+            }
+        }
         let root = store::clone_dir(&id)?;
         let mut clean = site::sanitize(&root, profile);
         clean.source = "manual".into();
@@ -641,6 +698,7 @@ pub fn run() {
             delete_file,
             import_asset,
             detect_site,
+            check_site,
             save_site,
             site_lookup,
         ])

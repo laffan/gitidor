@@ -24,6 +24,8 @@ import { isDark, onThemeChange } from "../lib/theme";
 import type { Clicked } from "../lib/locate";
 import { pageShows } from "../lib/published";
 import { assetUrl } from "./asset-url";
+import { aiReady, checkFor } from "../lib/preview-links";
+import { openRepoSettings } from "./repo-settings";
 
 const md = new MarkdownIt({ html: true, linkify: true, typographer: true });
 
@@ -191,13 +193,16 @@ export function previewPane(onLocate: (click: Clicked) => void): Preview {
     }
     const path = `${site.base}${entry?.url ?? "/"}`;
     const wanted = inTauri ? liveUrl(repo.id, path) : `${site.origin}${path}`;
-    if (frameMode !== "live" || frameRepo !== repo.id || frame?.dataset.for !== f?.path) {
+    // A new file, or the same file at a new URL (its routes were just worked
+    // out again), opens afresh; following links inside the page does not.
+    if (frameMode !== "live" || frameRepo !== repo.id || frame?.dataset.for !== f?.path || frame?.dataset.opened !== path) {
       frameRepo = repo.id;
       livePath = path;
       openedPath = path;
       pageFile = f?.path ?? null;
       makeFrame("live", wanted);
       frame!.dataset.for = f?.path ?? "";
+      frame!.dataset.opened = path;
     }
     address.firstElementChild!.textContent = publicAddress(repo, livePath) ?? repo.publicUrl;
     drawNote();
@@ -219,7 +224,13 @@ export function previewPane(onLocate: (click: Clicked) => void): Preview {
     const lines: Node[] = [];
     const onItsPage = !!f && !!repo && f.repoId === repo.id && pageFile === f.path;
     const entry = f ? knownFile(f.repoId, f.path) : undefined;
-    if (f && entry && !entry.url && livePath === openedPath) lines.push(h("span", null, "This file has no published URL in the site structure; showing the home page."));
+    const folder = f && repo ? contentFolder(repo.folders, f.path) : null;
+    const folderCheck = folder ? checkFor(repo?.site, folder) : undefined;
+    if (f && entry && !entry.url && livePath === openedPath) {
+      lines.push(h("span", null, "This post has no URL in the site structure, so the home page is showing. ", fixLinks(repo!.id, folder)));
+    } else if (onItsPage && folder && (folderCheck?.outcome === "failed" || folderCheck?.outcome === "mixed")) {
+      lines.push(h("span", null, `When last checked, the live site did not have every post in ${folder} at its URL. `, fixLinks(repo!.id, folder)));
+    }
     if (onItsPage && repo && f) {
       const st = store.status[repo.id];
       const notPushed = f.text !== f.saved || !st?.hasUpstream || st.changes.some((c) => c.path === f.path) || st.unpushed.includes(f.path);
@@ -307,6 +318,11 @@ export function previewPane(onLocate: (click: Clicked) => void): Preview {
   });
 
   on(["file", "preview"], update);
+  // Listings carry each post's URL; a new one (routes worked out again)
+  // moves the live frame.
+  on("files", () => {
+    if (store.preview.open && store.preview.mode === "live" && store.openFile) renderLive();
+  });
   on("save", () => {
     if (store.preview.open && store.preview.mode === "draft") update();
     else if (store.preview.open) drawNote();
@@ -319,6 +335,19 @@ export function previewPane(onLocate: (click: Clicked) => void): Preview {
   });
 
   return { el, update };
+}
+
+/** The content folder a post is listed under: the deepest that holds it. */
+function contentFolder(folders: string[], path: string): string | null {
+  return folders.filter((f) => path.startsWith(`${f}/`)).sort((a, b) => b.length - a.length)[0] ?? null;
+}
+
+/** What to do about a post the live site cannot be matched to. */
+function fixLinks(repoId: string, folder: string | null): HTMLElement {
+  if (aiReady() && folder) {
+    return h("button", { class: "link", type: "button", onclick: () => void actions.assessPreviewLinks(repoId, [folder], true) }, "Work out preview links with AI");
+  }
+  return h("button", { class: "link", type: "button", onclick: () => openRepoSettings(repoId) }, "Edit the site structure");
 }
 
 function escapeHtml(s: string): string {

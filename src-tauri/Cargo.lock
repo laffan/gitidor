@@ -1401,6 +1401,7 @@ dependencies = [
  "base64 0.22.1",
  "git2",
  "percent-encoding",
+ "regex",
  "serde",
  "serde_json",
  "tauri",

@@ -17,6 +17,7 @@ import { confirmModal, promptModal } from "./modal";
 import { toast } from "./toast";
 import { openRollback } from "./rollback";
 import { resizeHandle } from "./resize";
+import { aiReady } from "../lib/preview-links";
 
 export function reposColumn(): HTMLElement {
   const body = h("div", { class: "column-body" });
@@ -145,16 +146,15 @@ function card(repo: RepoRecord): HTMLElement {
 
 function repoMenu(repo: RepoRecord): MenuItem[] {
   const status = store.status[repo.id];
-  const aiReady =
-    (store.settings.ai.provider === "anthropic" && store.secrets.hasAnthropicKey) ||
-    (store.settings.ai.provider === "openai" && store.secrets.hasOpenaiKey);
+  const ai = aiReady();
   return [
     { label: "Repository settings…", icon: "gear", run: () => openRepoSettings(repo.id) },
     {
-      label: aiReady ? "Detect site structure with AI" : "Detect site structure (set up AI in Settings)",
+      label: ai ? "Work out preview links with AI" : "Work out preview links with AI (set up AI in Settings)",
       icon: "sparkle",
-      disabled: !aiReady,
-      run: () => void detectWithAi(repo.id),
+      disabled: !ai || !repo.folders.length,
+      title: !repo.folders.length ? "Add a content folder first" : undefined,
+      run: () => void actions.assessPreviewLinks(repo.id, repo.folders, true),
     },
     { label: "Check GitHub for changes", icon: "refresh", run: () => void actions.fetchRepo(repo.id) },
     {
@@ -182,16 +182,6 @@ function repoMenu(repo: RepoRecord): MenuItem[] {
     { separator: true },
     { label: "Remove…", icon: "trash", danger: true, run: () => void removeRepo(repo) },
   ];
-}
-
-export async function detectWithAi(id: string) {
-  await actions.gitStep(id, "Reading the site's structure…", async () => {
-    const profile = await api.detectSite(id, true);
-    store.repos = store.repos.map((r) => (r.id === id ? { ...r, site: profile } : r));
-    emit("repos");
-    await actions.loadFolders(id);
-    toast(`Site structure updated${profile.notes ? `: ${profile.notes.split("\n")[0]}` : "."}`);
-  });
 }
 
 async function removeRepo(repo: RepoRecord) {

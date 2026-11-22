@@ -524,3 +524,34 @@
     padding-bottom: calc(12px + var(--safe-bottom));
   }
 }
+
+/* What the live site said about a route, under it in the repository sheet. */
+.input.small {
+  height: 26px;
+  font-size: 11.5px;
+}
+
+.route-check {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.route-check svg {
+  vertical-align: -1px;
+}
+
+.route-check.ok > div:first-child {
+  color: var(--ok-text);
+}
+
+.route-check.warn > div:first-child {
+  color: var(--warn-text);
+}
+
+.route-check .sample {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}

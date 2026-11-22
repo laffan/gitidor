@@ -3,10 +3,12 @@
 
 import { api } from "./ipc";
 import { emit, folderKey, knownFile, repoById, store } from "./store";
-import type { RepoStatus, RollbackPlan } from "./types";
+import type { RepoStatus, RollbackPlan, SiteProfile } from "./types";
 import { toast } from "../ui/toast";
 import { newPostName, newPostText, todayIso } from "./frontmatter";
 import { log } from "./log";
+import { splitPublicUrl } from "./site";
+import { aiReady, checkFor, routeLabel, unconfirmed } from "./preview-links";
 
 export async function boot() {
   const [platform, settings, secrets, repos] = await Promise.all([
@@ -21,7 +23,41 @@ export async function boot() {
   store.repos = repos;
   emit("settings", "secrets", "repos");
   await Promise.all(repos.map((r) => refreshStatus(r.id)));
-  if (repos.length) await selectRepo(repos[0].id);
+  // Back where the last session left off: its repository, and its file if
+  // that is still there on this branch.
+  const last = recall();
+  const first = repos.find((r) => r.id === last.repoId) ?? repos[0];
+  if (first) await selectRepo(first.id);
+  if (last.file && repoById(last.file.repoId)) await openFile(last.file.repoId, last.file.path, { restoring: true });
+}
+
+// ── where the last session left off ─────────────────────────────────────────
+
+const LAST_KEY = "gitidor.last";
+
+interface Last {
+  repoId: string | null;
+  file: { repoId: string; path: string } | null;
+}
+
+/** The repository and file open last, on this device. */
+function recall(): Last {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST_KEY) ?? "null") as Partial<Last> | null;
+    return { repoId: typeof saved?.repoId === "string" ? saved.repoId : null, file: saved?.file && typeof saved.file.path === "string" ? saved.file : null };
+  } catch {
+    return { repoId: null, file: null };
+  }
+}
+
+function remember() {
+  const f = store.openFile;
+  const last: Last = { repoId: store.activeRepoId, file: f ? { repoId: f.repoId, path: f.path } : null };
+  try {
+    localStorage.setItem(LAST_KEY, JSON.stringify(last));
+  } catch {
+    // Private mode or storage turned off: the next launch starts fresh.
+  }
 }
 
 export async function reloadRepos() {
@@ -64,6 +100,7 @@ export async function selectRepo(id: string, opts: { showFiles?: boolean } = {})
   }
   if (opts.showFiles) store.layout.pane = "files";
   store.layout.drawer = false;
+  remember();
   emit("repos", "layout");
   if (changed) await loadFolders(id);
   const repo = repoById(id);
@@ -104,11 +141,78 @@ export async function loadFolder(repoId: string, folder: string) {
 }
 
 export async function setFolders(repoId: string, folders: string[]) {
+  const before = repoById(repoId)?.folders ?? [];
   const updated = await api.setFolders(repoId, folders);
   log.info("files", folders.length ? `Folders: ${updated.folders.join(", ")}` : "No folders chosen", repoId);
   store.repos = store.repos.map((r) => (r.id === repoId ? updated : r));
   emit("repos");
   await loadFolders(repoId);
+  // New content folders: make sure the preview can find their posts.
+  const added = updated.folders.filter((f) => !before.includes(f));
+  if (added.length) void assessPreviewLinks(repoId, added);
+}
+
+function setSite(repoId: string, site: SiteProfile) {
+  store.repos = store.repos.map((r) => (r.id === repoId ? { ...r, site } : r));
+  emit("repos", "preview");
+}
+
+/**
+ * Make sure the live preview can open these folders' posts and name the post
+ * behind a page. Their routes are tried on the live site first; any the site
+ * does not confirm are worked out by the AI provider, when one is set up — a
+ * one-time assessment per folder, since a confirmed route is not asked about
+ * again. A profile edited by hand is checked but never replaced.
+ *
+ * `force` (the repository's menu) always asks the AI, for every folder.
+ */
+export async function assessPreviewLinks(repoId: string, folders: string[], force = false): Promise<void> {
+  const repo = repoById(repoId);
+  if (!repo || !folders.length) return;
+  const ai = aiReady();
+  if (force && !ai) {
+    toast("Set up an AI provider under Settings → AI first.", "error");
+    return;
+  }
+  const canCheck = !!splitPublicUrl(repo.publicUrl) && store.online;
+  await gitStep(repoId, force ? "Working out preview links with AI…" : "Checking preview links on the live site…", async () => {
+    let profile = repo.site;
+    if (!force && canCheck) {
+      profile = await api.checkSite(repoId);
+      setSite(repoId, profile);
+    }
+    const open = force ? folders : unconfirmed(profile, folders);
+    if (!open.length) {
+      log.info("preview", `Preview links confirmed on the live site for ${folders.join(", ")}`, repoId);
+      return;
+    }
+    const failed = open.map((f) => checkFor(profile, f)).filter((c) => c && (c.outcome === "failed" || c.outcome === "mixed"));
+    if (!force && (!ai || !store.online || profile?.source === "manual")) {
+      // Nothing more to do here; say so only when the site said no.
+      if (failed.length) {
+        const how = profile?.source === "manual" ? "Edit them in the repository's settings, or ask AI from its ⋯ menu." : ai ? "Ask AI from the repository's ⋯ menu when online." : "Set up AI under Settings → AI to work them out, or edit them in the repository's settings.";
+        toast(`Preview links for ${failed.map((c) => c!.folder).join(", ")} do not match the live site. ${how}`, "error", 10000);
+      }
+      return;
+    }
+    store.busy[repoId] = "Working out preview links with AI…";
+    emit("status");
+    profile = await api.detectSite(repoId, true);
+    setSite(repoId, profile);
+    await loadFolders(repoId);
+    toast(...assessmentSummary(profile, folders));
+  });
+}
+
+/** What the AI pass came to, for a toast. */
+function assessmentSummary(profile: SiteProfile, folders: string[]): [string, "info" | "error", number] {
+  const checks = folders.map((f) => checkFor(profile, f)).filter((c) => !!c);
+  const bad = checks.filter((c) => c.outcome === "failed" || c.outcome === "mixed");
+  if (bad.length) return [`AI's preview links still miss posts on the live site: ${bad.map((c) => `${routeLabel(c)} — ${c.message}`).join(" ")} The routes can be edited in the repository's settings.`, "error", 12000];
+  const ok = checks.filter((c) => c.outcome === "ok");
+  if (ok.length && ok.length === checks.length) return [`Preview links worked out with AI and confirmed on the live site: ${ok.map(routeLabel).join(", ")}.`, "info", 7000];
+  const routes = profile.routes.filter((r) => folders.includes(r.folder)).map((r) => `${r.folder} → ${r.pattern}`);
+  return [`Preview links worked out with AI${routes.length ? `: ${routes.join(", ")}` : ""}. The live site could not confirm them yet.`, "info", 7000];
 }
 
 export async function removeFolder(repoId: string, folder: string) {
@@ -209,23 +313,30 @@ export function closeViewer() {
   emit("viewer", "files");
 }
 
-export async function openFile(repoId: string, path: string) {
+/** `restoring`: reopening the last session's file at launch, which says
+ *  nothing if the file has gone since. */
+export async function openFile(repoId: string, path: string, opts: { restoring?: boolean } = {}) {
   await flushSave();
   try {
     const text = await api.readFile(repoId, path);
-    log.debug("files", `Opened ${path}`, repoId);
+    log.debug("files", `${opts.restoring ? "Reopened" : "Opened"} ${path}`, repoId);
     store.openFile = { repoId, path, saved: text, text, state: "saved", error: null };
     store.layout.pane = "editor";
     store.viewing = null;
+    remember();
     emit("file", "layout", "files", "save", "viewer");
   } catch (e) {
-    toast((e as Error).message, "error");
+    if (opts.restoring) {
+      log.debug("files", `Last session's ${path} is not there any more`, repoId);
+      remember();
+    } else toast((e as Error).message, "error");
   }
 }
 
 export function closeFile() {
   void flushSave();
   store.openFile = null;
+  remember();
   emit("file", "files", "save");
 }
 

@@ -49,7 +49,30 @@ export interface KeyTest {
 
 export interface Route {
   folder: string;
+  /** `/blog/{fileSlug}/`, `/photo/{stem|number}/`: see `site.rs`. */
   pattern: string;
+  /** A regular expression over the file's path inside the folder, without
+   *  its extension; its groups are tokens in `pattern`. Absent: every file. */
+  capture?: string;
+}
+
+/** One post's URL, tried on the live site. */
+export interface SampleCheck {
+  path: string;
+  url: string;
+  status: number;
+  outcome: "found" | "reachable" | "different" | "missing" | "error";
+}
+
+/** What the live site said about one content folder's URLs. */
+export interface RouteCheck {
+  folder: string;
+  /** The route as it was checked; a check of an edited route is stale. */
+  pattern: string;
+  capture: string;
+  outcome: "ok" | "mixed" | "failed" | "unchecked";
+  message: string;
+  samples: SampleCheck[];
 }
 
 export interface AssetMap {
@@ -66,6 +89,9 @@ export interface SiteProfile {
   suggestedFolders: string[];
   publicUrlHint: string;
   notes: string;
+  /** The last check of the routes on the live site, one per folder. */
+  checks?: RouteCheck[];
+  checkedAt?: number;
 }
 
 export interface RepoRecord {

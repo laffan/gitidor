@@ -20,6 +20,9 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 percent-encoding = "2"
+# Route patterns may match a file name with a regular expression. Linear
+# time: a pattern from a model or a hand edit cannot hang a folder listing.
+regex = "1"
 
 # libgit2, vendored and built from source — linked rather than spawned, since
 # iOS forbids child processes. `libgit2-sys` uses the system TLS stack on any

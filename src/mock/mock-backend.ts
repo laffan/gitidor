@@ -254,7 +254,55 @@ function urlFor(repo: RepoRecord, path: string, text: string): string | null {
   if (!route) return null;
   const within = path.slice(route.folder.length + 1).replace(/\.(md|markdown)$/, "");
   const stem = within.split("/").pop() ?? within;
-  return route.pattern.replace("{fileSlug}", fileSlug(stem)).replace("{path}", within).replace("{slug}", fileSlug(stem));
+  const tokens: Record<string, string> = { path: within, stem, fileSlug: fileSlug(stem), slug: fileSlug(stem) };
+  let missing = false;
+  // The built-in tokens and the `number` filter; enough for the mock's sites.
+  const url = route.pattern.replace(/\{([^}|]+)((?:\|[^}|]+)*)\}/g, (_, name: string, filters: string) => {
+    let value = tokens[name];
+    if (value === undefined) {
+      missing = true;
+      return "";
+    }
+    for (const f of filters.split("|").filter(Boolean)) if (f === "number") value = String(Number(value.match(/\d+/)?.[0] ?? NaN));
+    return value;
+  });
+  return missing ? null : url;
+}
+
+/** Where the mock's "live sites" really serve each post. */
+function liveUrl(repoId: string, path: string, text: string): string | null {
+  const stem = path.split("/").pop()!.replace(/\.(md|markdown)$/, "");
+  if (repoId === "notes02") return `/garden/${stem}/`;
+  const repo = repos.find((r) => r.id === repoId);
+  return repo ? urlFor({ ...repo, site: profile }, path, text) : null;
+}
+
+function mockChecks(repo: RepoRecord): SiteProfile["checks"] {
+  return repo.folders.map((folder) => {
+    const route = repo.site?.routes.find((r) => r.folder === folder);
+    const samples = Object.entries(files[repo.id] ?? {})
+      .filter(([p, t]) => p.startsWith(`${folder}/`) && /\.md$/.test(p) && parseFrontmatter(t)?.data.draft !== true)
+      .slice(0, 3)
+      .map(([path, text]) => {
+        const url = urlFor(repo, path, text) ?? "";
+        const found = !!url && url === liveUrl(repo.id, path, text);
+        return { path, url, status: found ? 200 : 404, outcome: (found ? "found" : "missing") as "found" | "missing" };
+      });
+    const good = samples.filter((x) => x.outcome === "found").length;
+    const miss = samples.find((x) => x.outcome !== "found");
+    return {
+      folder,
+      pattern: route?.pattern ?? "",
+      capture: route?.capture ?? "",
+      outcome: !route ? "failed" : good === samples.length ? "ok" : good ? "mixed" : "failed",
+      message: !route
+        ? `No route gives the files in ${folder} a URL.`
+        : good === samples.length
+          ? `${good} of ${samples.length} posts found at their URLs on the live site.`
+          : `${good} of ${samples.length} posts found on the live site. ${miss!.path} → ${miss!.url}: the site has no page there (404)`,
+      samples,
+    };
+  });
 }
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -531,14 +579,33 @@ const handlers: Record<string, Handler> = {
   },
   detect_site: async (a) => {
     const id = String(a.id);
+    const repo = repos.find((r) => r.id === id)!;
     if (a.useAi) {
+      say("info", "ai", "Trying the rule-based routes on the live site and collecting the URLs it serves", id);
       say("info", "ai", "Asking Anthropic (claude-opus-5-5) about the site's structure", id);
-      say("debug", "ai", "Sending the file listing, config files and sample posts (18,412 characters)", id);
+      say("debug", "ai", "Sending the file listing, config and routing files, sample posts and live URLs (18,412 characters)", id);
       await delay(900);
       say("info", "ai", "Anthropic answered in 7.4 s — 6,120 tokens in, 412 out", id);
     }
-    say("info", a.useAi ? "ai" : "app", "Site structure (eleventy, from AI): posts → /blog/{fileSlug}/; 4 image folders mapped", id);
-    return { ...profile, source: a.useAi ? "ai" : "heuristic", notes: "Eleventy copies public/blog-images to /images/blog/; posts use the folder data file's permalink." };
+    const site: SiteProfile =
+      id === "notes02"
+        ? { ...repo.site!, source: a.useAi ? "ai" : "heuristic", routes: [{ folder: "content/notes", pattern: a.useAi ? "/garden/{stem}/" : "/notes/{path}/" }], notes: a.useAi ? "Hugo's permalinks setting publishes notes at /garden/:filename/." : "" }
+        : { ...profile, source: a.useAi ? "ai" : "heuristic", notes: "Eleventy copies public/blog-images to /images/blog/; posts use the folder data file's permalink." };
+    const updated = { ...repo, site };
+    updated.site = { ...site, checks: mockChecks(updated), checkedAt: Date.now() };
+    repos = repos.map((r) => (r.id === id ? updated : r));
+    for (const c of updated.site.checks ?? []) say(c.outcome === "ok" ? "info" : "warn", a.useAi ? "ai" : "preview", `${c.folder} → ${c.pattern}: ${c.message}`, id);
+    say("info", a.useAi ? "ai" : "app", `Site structure (${site.generator}${a.useAi ? ", from AI" : ", from config"}): ${site.routes.map((r) => `${r.folder} → ${r.pattern}`).join(", ")}`, id);
+    return updated.site;
+  },
+  check_site: async (a) => {
+    const id = String(a.id);
+    const repo = repos.find((r) => r.id === id)!;
+    await delay(400);
+    const site = { ...repo.site!, checks: mockChecks(repo), checkedAt: Date.now() };
+    repos = repos.map((r) => (r.id === id ? { ...r, site } : r));
+    for (const c of site.checks ?? []) say(c.outcome === "ok" ? "info" : "warn", "preview", `${c.folder} → ${c.pattern}: ${c.message}`, id);
+    return site;
   },
   save_site: (a) => {
     repos = repos.map((r) => (r.id === a.id ? { ...r, site: a.profile as SiteProfile } : r));

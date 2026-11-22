@@ -120,6 +120,8 @@ export const api = {
   importAsset: (id: string, dir: string, name: string, data: string) => call<string>("import_asset", { id, dir, name, data }),
 
   detectSite: (id: string, useAi: boolean) => call<SiteProfile>("detect_site", { id, useAi }),
+  /** Try the saved routes on the live site; the profile comes back with `checks`. */
+  checkSite: (id: string) => call<SiteProfile>("check_site", { id }),
   saveSite: (id: string, profile: SiteProfile) => call<RepoRecord>("save_site", { id, profile }),
   siteLookup: (id: string, urlPath: string) => call<string | null>("site_lookup", { id, urlPath }),
 };

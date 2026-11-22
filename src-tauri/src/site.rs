@@ -32,17 +32,78 @@
 //!
 //! A frontmatter `permalink` or `url` that is a plain path wins over the
 //! pattern; `permalink: false` means the file is not published.
+//!
+//! Sites whose URLs are worked out by code — an Eleventy `permalink`
+//! function, a Next.js or Astro route file — need more than the tokens, so a
+//! token can also be:
+//!
+//! - `{fm.key}` — any top-level frontmatter field (`{fm.category}`);
+//! - a group of the route's `capture`, a regular expression matched against
+//!   the file's path inside the folder without its extension: `(?<n>…)` is
+//!   `{n}`, an unnamed group is `{1}`. A file it does not match has no URL
+//!   under that route.
+//!
+//! and any token can go through filters, left to right: `{stem|number}`,
+//! `{fm.title|slugify}`, `{stem|replace:_:-|lower}`.
+//!
+//! | filter | does |
+//! |---|---|
+//! | `number` | the first run of digits, leading zeros dropped (`0007` → `7`), as JavaScript's `parseInt(s.match(/\d+/))` |
+//! | `lower`, `upper` | case |
+//! | `slugify` | lower case, runs of anything else to one `-` |
+//! | `strip-date` | a leading `YYYY-MM-DD-` off, as `{fileSlug}` does |
+//! | `replace:FROM:TO` | every `FROM` to `TO`, literally (`TO` may be empty) |
+//!
+//! A token that is unknown, a frontmatter field the file does not have, or a
+//! `number` with no digits means the file has no URL, rather than a wrong one.
+//! Dripdrip's `permalink(data)` returns `/photo/${parseInt(fileSlug)}/`; its
+//! pattern is `/photo/{stem|number}/`.
 
 use crate::frontmatter::{self, Front};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Route {
     pub folder: String,
     pub pattern: String,
+    /// A regular expression matched against the file's path inside the
+    /// folder, without its extension; its groups are tokens in `pattern`.
+    /// Empty: every file in the folder.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub capture: String,
+}
+
+/// One post's URL tried on the live site.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SampleCheck {
+    pub path: String,
+    pub url: String,
+    pub status: u16,
+    /// `found`: the page has the post's text. `reachable`: there is a page
+    /// and the post has no text to compare. `different`: there is a page
+    /// without the post's text. `missing`: the site has no page there.
+    /// `error`: the site could not be asked.
+    pub outcome: String,
+}
+
+/// What the live site said about one route's URLs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RouteCheck {
+    pub folder: String,
+    /// The route as it was when checked, so an edit makes the check stale.
+    pub pattern: String,
+    pub capture: String,
+    /// `ok`, `mixed` (some found, some not), `failed`, or `unchecked`
+    /// (offline, no public URL, nothing published to try).
+    pub outcome: String,
+    pub message: String,
+    pub samples: Vec<SampleCheck>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -70,6 +131,23 @@ pub struct SiteProfile {
     /// A custom domain found in a `CNAME` file, as `https://…/`.
     pub public_url_hint: String,
     pub notes: String,
+    /// The last check of the routes against the live site, one per folder.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<RouteCheck>,
+    /// When that was, in milliseconds; 0 for never.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub checked_at: i64,
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
+}
+
+impl RouteCheck {
+    /// Whether this check was of `route` as it stands now.
+    pub fn is_for(&self, route: &Route) -> bool {
+        self.folder == route.folder && self.pattern == route.pattern && self.capture == route.capture
+    }
 }
 
 // ── URLs ────────────────────────────────────────────────────────────────────
@@ -87,25 +165,84 @@ pub fn url_for(profile: &SiteProfile, rel_path: &str, front: &Front) -> Option<S
             return Some(clean_url(explicit));
         }
     }
-    let route = route_for(profile, rel_path)?;
-    Some(expand(&route.pattern, &tokens(&route.folder, rel_path, front)))
+    let (route, groups) = route_for(profile, rel_path)?;
+    let builtin = tokens(&route.folder, rel_path, front);
+    let lookup = |name: &str| -> Option<String> {
+        if let Some(v) = groups.get(name) {
+            return Some(v.clone());
+        }
+        if let Some(key) = name.strip_prefix("fm.") {
+            return front.get(&key.to_ascii_lowercase()).map(str::to_string);
+        }
+        builtin.get(name).cloned()
+    };
+    expand_with(&route.pattern, &lookup).ok().flatten()
 }
 
-fn route_for<'a>(profile: &'a SiteProfile, rel_path: &str) -> Option<&'a Route> {
-    profile
+/// The route a file is published by — the deepest folder that holds it whose
+/// `capture` (if any) matches — and that capture's groups.
+fn route_for<'a>(profile: &'a SiteProfile, rel_path: &str) -> Option<(&'a Route, BTreeMap<String, String>)> {
+    let mut candidates: Vec<&Route> = profile
         .routes
         .iter()
-        .filter(|r| r.folder.is_empty() || rel_path.starts_with(&format!("{}/", r.folder.trim_matches('/'))))
-        .max_by_key(|r| r.folder.len())
+        .filter(|r| r.folder.trim_matches('/').is_empty() || rel_path.starts_with(&format!("{}/", r.folder.trim_matches('/'))))
+        .collect();
+    candidates.sort_by_key(|r| std::cmp::Reverse(r.folder.trim_matches('/').len()));
+    candidates.into_iter().find_map(|r| {
+        if r.capture.trim().is_empty() {
+            return Some((r, BTreeMap::new()));
+        }
+        let re = compiled(&r.capture).ok()?;
+        Some((r, capture_groups(&re, &within_no_ext(&r.folder, rel_path))?))
+    })
+}
+
+/// A file's path inside a route's folder, without its extension:
+/// `content/photos/0007.md` in `content/photos` is `0007`.
+pub fn within_no_ext(folder: &str, rel_path: &str) -> String {
+    let folder = folder.trim_matches('/');
+    let within = if folder.is_empty() { rel_path } else { rel_path.strip_prefix(folder).unwrap_or(rel_path).trim_start_matches('/') };
+    match within.rfind('.') {
+        Some(dot) if !within[dot..].contains('/') => within[..dot].to_string(),
+        _ => within.to_string(),
+    }
+}
+
+fn capture_groups(re: &regex::Regex, text: &str) -> Option<BTreeMap<String, String>> {
+    let caps = re.captures(text)?;
+    let mut out = BTreeMap::new();
+    for (i, name) in re.capture_names().enumerate().skip(1) {
+        let value = caps.get(i).map(|m| m.as_str().to_string()).unwrap_or_default();
+        if let Some(name) = name {
+            out.insert(name.to_string(), value.clone());
+        }
+        out.insert(i.to_string(), value);
+    }
+    Some(out)
+}
+
+/// A route's `capture`, compiled once. The `regex` crate runs in linear time,
+/// and the size limit keeps a pathological pattern from costing much memory.
+pub fn compiled(pattern: &str) -> Result<regex::Regex, String> {
+    static CACHE: OnceLock<Mutex<HashMap<String, regex::Regex>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(re) = cache.lock().ok().and_then(|c| c.get(pattern).cloned()) {
+        return Ok(re);
+    }
+    let re = regex::RegexBuilder::new(pattern).size_limit(1 << 20).build().map_err(|e| format!("the capture `{pattern}` is not a regular expression this app can use: {e}"))?;
+    if let Ok(mut c) = cache.lock() {
+        if c.len() > 64 {
+            c.clear();
+        }
+        c.insert(pattern.to_string(), re.clone());
+    }
+    Ok(re)
 }
 
 pub fn tokens(folder: &str, rel_path: &str, front: &Front) -> BTreeMap<&'static str, String> {
     let folder = folder.trim_matches('/');
-    let within = if folder.is_empty() { rel_path } else { rel_path.strip_prefix(folder).unwrap_or(rel_path).trim_start_matches('/') };
-    let no_ext = match within.rfind('.') {
-        Some(dot) if !within[dot..].contains('/') => &within[..dot],
-        _ => within,
-    };
+    let no_ext = within_no_ext(folder, rel_path);
+    let no_ext = no_ext.as_str();
     let path = ["/index", "/_index"]
         .iter()
         .find_map(|tail| no_ext.strip_suffix(tail))
@@ -140,12 +277,142 @@ pub fn strip_date(stem: &str) -> &str {
     }
 }
 
-pub fn expand(pattern: &str, tokens: &BTreeMap<&'static str, String>) -> String {
-    let mut out = pattern.to_string();
-    for (key, value) in tokens {
-        out = out.replace(&format!("{{{key}}}"), value);
+/// The built-in tokens, for checking a pattern without a file to fill it.
+pub const TOKENS: &[&str] = &["path", "stem", "fileSlug", "slug", "title", "year", "month", "day", "dir"];
+
+#[derive(Debug, Clone, PartialEq)]
+enum Filter {
+    Number,
+    Lower,
+    Upper,
+    Slugify,
+    StripDate,
+    Replace(String, String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Piece {
+    Text(String),
+    Token { name: String, filters: Vec<Filter> },
+}
+
+/// A pattern in pieces: text, and `{name|filter|filter:arg}` tokens.
+fn parse_pattern(pattern: &str) -> Result<Vec<Piece>, String> {
+    let mut out = Vec::new();
+    let mut rest = pattern;
+    while let Some(open) = rest.find('{') {
+        if open > 0 {
+            out.push(Piece::Text(rest[..open].to_string()));
+        }
+        let close = rest[open..].find('}').ok_or_else(|| format!("`{rest}` opens a {{ it never closes"))? + open;
+        let inner = &rest[open + 1..close];
+        let mut parts = inner.split('|').map(str::trim);
+        let name = parts.next().unwrap_or_default().to_string();
+        if name.is_empty() {
+            return Err("`{}` names no token".into());
+        }
+        let filters = parts.map(parse_filter).collect::<Result<Vec<_>, _>>()?;
+        out.push(Piece::Token { name, filters });
+        rest = &rest[close + 1..];
     }
-    clean_url(&out)
+    if !rest.is_empty() {
+        out.push(Piece::Text(rest.to_string()));
+    }
+    Ok(out)
+}
+
+fn parse_filter(text: &str) -> Result<Filter, String> {
+    let mut args = text.split(':');
+    let name = args.next().unwrap_or_default();
+    let filter = match name {
+        "number" | "int" => Filter::Number,
+        "lower" => Filter::Lower,
+        "upper" => Filter::Upper,
+        "slugify" | "slug" => Filter::Slugify,
+        "strip-date" => Filter::StripDate,
+        "replace" => {
+            let from = args.next().unwrap_or_default();
+            let to = args.next().ok_or_else(|| format!("`{text}` needs two arguments: replace:FROM:TO"))?;
+            if from.is_empty() {
+                return Err(format!("`{text}` has nothing to replace"));
+            }
+            return Ok(Filter::Replace(from.to_string(), to.to_string()));
+        }
+        other => return Err(format!("`{other}` is not a filter (number, lower, upper, slugify, strip-date, replace:FROM:TO)")),
+    };
+    Ok(filter)
+}
+
+fn apply(filter: &Filter, value: String) -> Option<String> {
+    Some(match filter {
+        Filter::Number => {
+            let start = value.find(|c: char| c.is_ascii_digit())?;
+            let digits: String = value[start..].chars().take_while(char::is_ascii_digit).collect();
+            let trimmed = digits.trim_start_matches('0');
+            if trimmed.is_empty() { "0".to_string() } else { trimmed.to_string() }
+        }
+        Filter::Lower => value.to_lowercase(),
+        Filter::Upper => value.to_uppercase(),
+        Filter::Slugify => slugify(&value),
+        Filter::StripDate => strip_date(&value).to_string(),
+        Filter::Replace(from, to) => value.replace(from.as_str(), to),
+    })
+}
+
+/// Fill a pattern from `lookup`. `Err` is a pattern that cannot be read;
+/// `Ok(None)` a file it cannot give a URL (an unknown token or a missing
+/// field, which would otherwise make a URL that is wrong rather than none).
+pub fn expand_with(pattern: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Result<Option<String>, String> {
+    let mut out = String::new();
+    for piece in parse_pattern(pattern)? {
+        match piece {
+            Piece::Text(t) => out.push_str(&t),
+            Piece::Token { name, filters } => {
+                let Some(mut value) = lookup(&name) else { return Ok(None) };
+                for f in &filters {
+                    let Some(next) = apply(f, value) else { return Ok(None) };
+                    value = next;
+                }
+                out.push_str(&value);
+            }
+        }
+    }
+    Ok(Some(clean_url(&out)))
+}
+
+/// What is wrong with a route, if anything: a pattern that cannot be read,
+/// a token that is neither built in, a frontmatter field nor a group of its
+/// capture, or a capture that is not a regular expression.
+pub fn route_problems(route: &Route) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut groups: Vec<String> = Vec::new();
+    if !route.capture.trim().is_empty() {
+        match compiled(&route.capture) {
+            Ok(re) => {
+                for (i, name) in re.capture_names().enumerate().skip(1) {
+                    groups.push(i.to_string());
+                    if let Some(n) = name {
+                        groups.push(n.to_string());
+                    }
+                }
+            }
+            Err(e) => out.push(e),
+        }
+    }
+    match parse_pattern(&route.pattern) {
+        Ok(pieces) => {
+            for piece in pieces {
+                if let Piece::Token { name, .. } = piece {
+                    let known = TOKENS.contains(&name.as_str()) || groups.contains(&name) || name.strip_prefix("fm.").is_some_and(|k| !k.is_empty());
+                    if !known {
+                        out.push(format!("{{{name}}} is not a token (use one of {}, fm.<field>, or a group of the capture)", TOKENS.join(" ")));
+                    }
+                }
+            }
+        }
+        Err(e) => out.push(e),
+    }
+    out
 }
 
 /// One leading slash, no doubled slashes, the trailing slash as written.
@@ -301,11 +568,15 @@ fn eleventy(root: &Path, _config_name: &str, config: &str, dirs: &[(String, usiz
         let from = from.trim_start_matches("./").trim_matches('/').to_string();
         let to = to.trim_start_matches("./").trim_matches('/').to_string();
         if root.join(&from).is_dir() {
-            assets.push(AssetMap { url_prefix: format!("/{to}/"), repo_path: format!("{from}/") });
+            // `{ "public": "/" }` copies a folder to the site root.
+            let url_prefix = if to.is_empty() { "/".to_string() } else { format!("/{to}/") };
+            assets.push(AssetMap { url_prefix, repo_path: format!("{from}/") });
         }
     }
     // A passthrough copy keeps paths relative to the input directory.
-    assets.push(AssetMap { url_prefix: "/".into(), repo_path: if input.is_empty() { String::new() } else { format!("{input}/") } });
+    if !assets.iter().any(|a| a.url_prefix == "/") {
+        assets.push(AssetMap { url_prefix: "/".into(), repo_path: if input.is_empty() { String::new() } else { format!("{input}/") } });
+    }
 
     let folders = suggest(dirs, &["_site"]);
     let mut notes = Vec::new();
@@ -314,16 +585,21 @@ fn eleventy(root: &Path, _config_name: &str, config: &str, dirs: &[(String, usiz
         .map(|folder| {
             let relative = folder.strip_prefix(&input).unwrap_or(folder).trim_matches('/').to_string();
             let default = format!("/{relative}/{{path}}/");
-            let pattern = eleventy_directory_permalink(root, folder)
-                .map(|template| match translate_eleventy(&template, &relative) {
+            let pattern = match eleventy_directory_permalink(root, folder) {
+                Some(DirPermalink::Template(template)) => match translate_eleventy(&template, &relative) {
                     Some(p) => p,
                     None => {
                         notes.push(format!("{folder}: permalink template `{template}` is not understood; using the default."));
                         default.clone()
                     }
-                })
-                .unwrap_or(default);
-            Route { folder: folder.clone(), pattern }
+                },
+                Some(DirPermalink::Code(file)) => {
+                    notes.push(format!("{folder}: the permalink is worked out by code in {file}, which rules cannot read; the URL pattern here is the default and probably wrong. Ask AI to work it out."));
+                    default.clone()
+                }
+                None => default,
+            };
+            Route { folder: folder.clone(), pattern, ..Default::default() }
         })
         .collect();
 
@@ -337,23 +613,55 @@ fn eleventy(root: &Path, _config_name: &str, config: &str, dirs: &[(String, usiz
     }
 }
 
+enum DirPermalink {
+    /// A template string: `/blog/{{ page.fileSlug }}/`.
+    Template(String),
+    /// A function, in the named file.
+    Code(String),
+}
+
 /// The `permalink` from a folder's directory data file, Eleventy's way of
 /// giving every file in a folder the same URL shape.
-fn eleventy_directory_permalink(root: &Path, folder: &str) -> Option<String> {
+fn eleventy_directory_permalink(root: &Path, folder: &str) -> Option<DirPermalink> {
     let base = folder.rsplit('/').next().unwrap_or(folder);
-    for name in [format!("{base}.json"), format!("{base}.11tydata.json"), format!("{base}.11tydata.js"), format!("{base}.11tydata.cjs")] {
-        if let Some(text) = read(root, &format!("{folder}/{name}")) {
+    for name in [
+        format!("{base}.json"),
+        format!("{base}.11tydata.json"),
+        format!("{base}.11tydata.js"),
+        format!("{base}.11tydata.cjs"),
+        format!("{base}.11tydata.mjs"),
+    ] {
+        let rel = format!("{folder}/{name}");
+        if let Some(text) = read(root, &rel) {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
                 if let Some(p) = value.get("permalink").and_then(|p| p.as_str()) {
-                    return Some(p.to_string());
+                    return Some(DirPermalink::Template(p.to_string()));
                 }
             }
+            if permalink_is_code(&text) {
+                return Some(DirPermalink::Code(rel));
+            }
             if let Some(p) = capture(&text, "permalink") {
-                return Some(p);
+                return Some(DirPermalink::Template(p));
             }
         }
     }
     None
+}
+
+/// `permalink: function (data) {…}`, `permalink: (data) => …`,
+/// `permalink(data) {…}`: a URL computed by code.
+fn permalink_is_code(text: &str) -> bool {
+    text.lines().any(|line| {
+        let Some(rest) = line.trim().strip_prefix("permalink") else { return false };
+        let rest = rest.trim_start();
+        if rest.starts_with('(') {
+            return true;
+        }
+        let Some(value) = rest.strip_prefix(':').or_else(|| rest.strip_prefix('=')) else { return false };
+        let value = value.trim_start();
+        value.starts_with("function") || value.starts_with("async") || value.starts_with('(') || value.contains("=>")
+    })
 }
 
 /// An Eleventy permalink template in this module's pattern language, for the
@@ -463,7 +771,7 @@ fn jekyll(config: &str, dirs: &[(String, usize)]) -> SiteProfile {
             } else {
                 format!("/{folder}/{{path}}.html")
             };
-            Route { folder: folder.clone(), pattern }
+            Route { folder: folder.clone(), pattern, ..Default::default() }
         })
         .collect();
     SiteProfile {
@@ -535,7 +843,7 @@ fn hugo(root: &Path, config: &str, dirs: &[(String, usize)]) -> SiteProfile {
                 .get(&section)
                 .map(|p| translate_colon_tokens(&p.replace(":section", &section)))
                 .unwrap_or_else(|| format!("/{section_path}/{{path}}/"));
-            Route { folder: folder.clone(), pattern }
+            Route { folder: folder.clone(), pattern, ..Default::default() }
         })
         .collect();
     let static_dir = if root.join("static").is_dir() { "static/" } else { "" };
@@ -561,7 +869,7 @@ fn astro(root: &Path, dirs: &[(String, usize)]) -> SiteProfile {
             } else {
                 format!("/{folder}/{{path}}/")
             };
-            Route { folder: folder.clone(), pattern }
+            Route { folder: folder.clone(), pattern, ..Default::default() }
         })
         .collect();
     SiteProfile {
@@ -576,7 +884,7 @@ fn astro(root: &Path, dirs: &[(String, usize)]) -> SiteProfile {
 
 fn generic(root: &Path, dirs: &[(String, usize)]) -> SiteProfile {
     let folders = suggest(dirs, &[]);
-    let routes = folders.iter().map(|f| Route { folder: f.clone(), pattern: format!("/{f}/{{path}}/") }).collect();
+    let routes = folders.iter().map(|f| Route { folder: f.clone(), pattern: format!("/{f}/{{path}}/"), ..Default::default() }).collect();
     let assets_root = ["public", "static"].iter().find(|d| root.join(d).is_dir()).map(|d| format!("{d}/")).unwrap_or_default();
     SiteProfile {
         generator: "unknown".into(),
@@ -627,10 +935,30 @@ pub fn sanitize(root: &Path, mut profile: SiteProfile) -> SiteProfile {
     });
     for r in &mut profile.routes {
         r.folder = r.folder.trim_matches('/').to_string();
+        r.pattern = r.pattern.trim().to_string();
+        r.capture = r.capture.trim().to_string();
         if !r.pattern.starts_with('/') {
             r.pattern = format!("/{}", r.pattern);
         }
     }
+    // A route whose pattern cannot be read gives no URLs at all; say so in
+    // the notes rather than keep it.
+    let mut dropped = Vec::new();
+    profile.routes.retain(|r| {
+        let problems = route_problems(r);
+        if !problems.is_empty() {
+            dropped.push(format!("{}: `{}` was left out: {}", r.folder, r.pattern, problems.join("; ")));
+        }
+        problems.is_empty()
+    });
+    if !dropped.is_empty() {
+        let mut notes: Vec<String> = profile.notes.lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect();
+        notes.extend(dropped);
+        profile.notes = notes.join("\n");
+    }
+    // A check speaks for a route as it was; one that has changed has none.
+    let routes = profile.routes.clone();
+    profile.checks.retain(|c| routes.iter().any(|r| c.is_for(r)));
     profile.assets.retain(|a| a.url_prefix.starts_with('/') && (a.repo_path.is_empty() || safe_dir(&a.repo_path)));
     for a in &mut profile.assets {
         if !a.url_prefix.ends_with('/') {
@@ -651,6 +979,10 @@ mod tests {
 
     fn front(text: &str) -> Front {
         frontmatter::parse(text)
+    }
+
+    fn route(folder: &str, pattern: &str) -> Route {
+        Route { folder: folder.into(), pattern: pattern.into(), ..Default::default() }
     }
 
     /// The shape of the blog this app was written for, in miniature.
@@ -725,7 +1057,7 @@ mod tests {
 
     #[test]
     fn frontmatter_permalinks_and_drafts_win() {
-        let p = SiteProfile { routes: vec![Route { folder: "posts".into(), pattern: "/blog/{slug}/".into() }], ..Default::default() };
+        let p = SiteProfile { routes: vec![route("posts", "/blog/{slug}/")], ..Default::default() };
         assert_eq!(url_for(&p, "posts/a.md", &front("---\nslug: custom\n---\n")).as_deref(), Some("/blog/custom/"));
         assert_eq!(url_for(&p, "posts/a.md", &front("---\npermalink: /elsewhere/\n---\n")).as_deref(), Some("/elsewhere/"));
         assert_eq!(url_for(&p, "posts/a.md", &front("---\npermalink: false\n---\n")), None);
@@ -739,7 +1071,7 @@ mod tests {
         assert_eq!(translate_colon_tokens("/:year/:slug/"), "/{year}/{slug}/");
         let dirs = vec![("_posts".to_string(), 3), ("about".to_string(), 1)];
         let j = jekyll("title: x\npermalink: pretty\n", &dirs);
-        assert_eq!(j.routes[0], Route { folder: "_posts".into(), pattern: "/{year}/{month}/{day}/{fileSlug}/".into() });
+        assert_eq!(j.routes[0], route("_posts", "/{year}/{month}/{day}/{fileSlug}/"));
     }
 
     #[test]
@@ -755,6 +1087,85 @@ mod tests {
         assert_eq!(normalize_url_path("/blog/-crickets/index.html?x=1"), "/blog/-crickets");
         assert_eq!(normalize_url_path("/caf%C3%A9/"), "/café");
         assert_eq!(normalize_url_path("/"), "/");
+    }
+
+    #[test]
+    fn filters_frontmatter_fields_and_captures() {
+        let photos = SiteProfile { routes: vec![route("content/photos", "/photo/{stem|number}/")], ..Default::default() };
+        assert_eq!(url_for(&photos, "content/photos/0007.md", &front("")).as_deref(), Some("/photo/7/"));
+        assert_eq!(url_for(&photos, "content/photos/0010.md", &front("")).as_deref(), Some("/photo/10/"));
+        assert_eq!(url_for(&photos, "content/photos/0000.md", &front("")).as_deref(), Some("/photo/0/"));
+        // No digits: no URL, rather than `/photo//`.
+        assert_eq!(url_for(&photos, "content/photos/about.md", &front("")), None);
+
+        let by_field = SiteProfile { routes: vec![route("posts", "/{fm.category|slugify}/{title}/")], ..Default::default() };
+        let f = front("---\ntitle: Hello There\ncategory: Field Notes\n---\n");
+        assert_eq!(url_for(&by_field, "posts/a.md", &f).as_deref(), Some("/field-notes/hello-there/"));
+        // A post without the field has no URL under this route.
+        assert_eq!(url_for(&by_field, "posts/a.md", &front("---\ntitle: x\n---\n")), None);
+
+        let replaced = SiteProfile { routes: vec![route("notes", "/n/{stem|replace:_:-|upper}")], ..Default::default() };
+        assert_eq!(url_for(&replaced, "notes/a_b.md", &front("")).as_deref(), Some("/n/A-B"));
+
+        // Two routes for one folder, told apart by their captures; the file
+        // `capture` does not match falls to the next route, or has no URL.
+        let captured = SiteProfile {
+            routes: vec![
+                Route { folder: "posts".into(), pattern: "/{y}/{name}/".into(), capture: r"^(?<y>\d{4})-\d\d-\d\d-(?<name>.+)$".into() },
+                Route { folder: "posts".into(), pattern: "/pages/{1|lower}/".into(), capture: r"^page-(.+)$".into() },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(url_for(&captured, "posts/2024-05-01-spring.md", &front("")).as_deref(), Some("/2024/spring/"));
+        assert_eq!(url_for(&captured, "posts/page-About.md", &front("")).as_deref(), Some("/pages/about/"));
+        assert_eq!(url_for(&captured, "posts/untitled.md", &front("")), None);
+    }
+
+    #[test]
+    fn route_problems_name_what_is_wrong() {
+        assert!(route_problems(&route("p", "/blog/{fileSlug|slugify}/")).is_empty());
+        assert!(route_problems(&route("p", "/{fm.series}/{stem}/")).is_empty());
+        assert!(route_problems(&route("p", "/{bogus}/"))[0].contains("{bogus}"));
+        assert!(route_problems(&route("p", "/{stem|shout}/"))[0].contains("shout"));
+        assert!(route_problems(&route("p", "/{stem"))[0].contains("never closes"));
+        assert!(route_problems(&route("p", "/{stem|replace:a}/"))[0].contains("two arguments"));
+        let bad = Route { folder: "p".into(), pattern: "/{n}/".into(), capture: "(".into() };
+        assert!(route_problems(&bad)[0].contains("regular expression"));
+        let good = Route { folder: "p".into(), pattern: "/{n}/{1}/".into(), capture: r"(?<n>\d+)".into() };
+        assert!(route_problems(&good).is_empty());
+    }
+
+    /// dripdrip.natelaffan.com in miniature: a permalink function in the
+    /// folder data file, and `public` copied to the site root.
+    #[test]
+    fn a_permalink_function_is_flagged_not_misread() {
+        let root = std::env::temp_dir().join(format!("gitidor-site-{}-{}", std::process::id(), crate::store::new_id()));
+        fs::create_dir_all(root.join("content/photos")).unwrap();
+        fs::create_dir_all(root.join("public/media/photos")).unwrap();
+        fs::write(root.join("eleventy.config.js"), "export default function(c) {\n  c.addPassthroughCopy({\n    \"public\": \"/\"\n  });\n  return { dir: { input: \".\" } };\n}").unwrap();
+        fs::write(
+            root.join("content/photos/photos.11tydata.js"),
+            "export default {\n  layout: \"layouts/photo.njk\",\n  permalink: function(data) {\n    const match = data.page.fileSlug.match(/(\\d+)/);\n    return `/photo/${parseInt(match[1])}/`;\n  }\n};",
+        )
+        .unwrap();
+        fs::write(root.join("content/photos/0001.md"), "---\nfilename: a.jpg\n---\nCaption.").unwrap();
+        let p = detect(&root);
+        let r = p.routes.iter().find(|r| r.folder == "content/photos").unwrap();
+        assert!(!r.pattern.contains("function"), "{}", r.pattern);
+        assert!(p.notes.contains("worked out by code in content/photos/photos.11tydata.js"), "{}", p.notes);
+        assert_eq!(p.assets, vec![AssetMap { url_prefix: "/".into(), repo_path: "public/".into() }]);
+        assert!(permalink_is_code("permalink: (data) => `/x/${data.page.fileSlug}/`"));
+        assert!(permalink_is_code("  permalink(data) {"));
+        assert!(!permalink_is_code("permalink: \"/blog/{{ page.fileSlug }}/\""));
+    }
+
+    #[test]
+    fn sanitize_keeps_checks_only_for_routes_as_they_are() {
+        let root = eleventy_blog();
+        let check = |pattern: &str| RouteCheck { folder: "posts".into(), pattern: pattern.into(), outcome: "ok".into(), ..Default::default() };
+        let p = sanitize(&root, SiteProfile { routes: vec![route("posts", "/blog/{fileSlug}/")], checks: vec![check("/blog/{fileSlug}/"), check("/old/{path}/")], ..Default::default() });
+        assert_eq!(p.checks.len(), 1);
+        assert_eq!(p.checks[0].pattern, "/blog/{fileSlug}/");
     }
 
     /// Point `GITIDOR_SITE` at a real checkout to see what is detected.
@@ -777,13 +1188,14 @@ mod tests {
         let p = sanitize(
             &root,
             SiteProfile {
-                routes: vec![Route { folder: "posts".into(), pattern: "blog/{slug}/".into() }, Route { folder: "../etc".into(), pattern: "/x/".into() }],
+                routes: vec![route("posts", "blog/{slug}/"), route("../etc", "/x/"), route("posts", "/{nope}/")],
                 assets: vec![AssetMap { url_prefix: "/img".into(), repo_path: "public/blog-images".into() }, AssetMap { url_prefix: "/y/".into(), repo_path: "missing/".into() }],
                 stylesheets: vec!["styles/main.css".into(), "nope.css".into()],
                 ..Default::default()
             },
         );
-        assert_eq!(p.routes, vec![Route { folder: "posts".into(), pattern: "/blog/{slug}/".into() }]);
+        assert_eq!(p.routes, vec![route("posts", "/blog/{slug}/")]);
+        assert!(p.notes.contains("{nope} is not a token"), "{}", p.notes);
         assert_eq!(p.assets, vec![AssetMap { url_prefix: "/img/".into(), repo_path: "public/blog-images/".into() }]);
         assert_eq!(p.stylesheets, vec!["styles/main.css".to_string()]);
     }
