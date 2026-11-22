@@ -39,8 +39,25 @@ textarea {
   inset: 0;
   display: grid;
   grid-template-columns: var(--repos-w, 236px) var(--files-w, 292px) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
+  /* The side columns, then the footer they share; the editor spans both. */
+  grid-template-rows: minmax(0, 1fr) auto;
   transition: grid-template-columns 0.18s ease;
+  --foot-h: 36px;
+}
+
+.col-repos {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.col-files {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.col-editor {
+  grid-column: 3;
+  grid-row: 1 / span 2;
 }
 
 .drawer-scrim {
@@ -154,12 +171,26 @@ textarea {
   -webkit-overflow-scrolling: touch;
 }
 
-.column-foot {
-  flex: none;
-  padding: 8px 8px calc(10px + var(--safe-bottom));
+/* Settings, night vision, the console: under both side columns, or the
+   Files column alone when the repositories are hidden (side-foot.ts). The
+   same height as the editor's footer, so their top lines meet. */
+.side-foot {
+  grid-column: 1 / span 2;
+  grid-row: 2;
+  min-width: 0;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 6px;
+  height: calc(var(--foot-h) + var(--safe-bottom));
+  padding: 0 8px var(--safe-bottom) max(8px, var(--safe-left));
+  border-top: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  background: var(--bg-files);
+}
+
+#app.hide-repos.hide-files .side-foot {
+  display: none;
 }
 
 /* ── column 1: repositories ── */
@@ -575,13 +606,14 @@ html.platform-macos #app.hide-repos.hide-files .editor-bar {
 .editor-foot {
   flex: none;
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
   border-top: 1px solid var(--line);
-  padding: 6px 14px calc(6px + var(--safe-bottom));
+  padding: 4px 14px calc(4px + var(--safe-bottom));
   color: var(--text-3);
   font-size: 11.5px;
-  min-height: 28px;
+  min-height: calc(var(--foot-h) + var(--safe-bottom));
 }
 
 .editor-foot a {
@@ -1141,6 +1173,16 @@ button.link:hover {
   #app.hide-files.hide-repos {
     grid-template-columns: 0 minmax(0, 1fr);
   }
+  .col-files,
+  .side-foot {
+    grid-column: 1;
+  }
+  .col-editor {
+    grid-column: 2;
+  }
+  #app.hide-files .side-foot {
+    display: none;
+  }
   .col-repos {
     position: fixed;
     z-index: 40;
@@ -1201,6 +1243,23 @@ button.link:hover {
   #app[data-pane="files"] .col-files,
   #app[data-pane="editor"] .col-editor {
     display: flex;
+  }
+  .col-repos,
+  .col-files,
+  .col-editor,
+  .side-foot {
+    grid-column: 1;
+  }
+  .side-foot {
+    border-right: 0;
+  }
+  /* One column at a time: the footer goes with the side columns. */
+  #app[data-pane="repos"] .side-foot,
+  #app[data-pane="files"] .side-foot {
+    display: flex !important;
+  }
+  #app[data-pane="editor"] .side-foot {
+    display: none;
   }
   .only-narrow {
     display: none !important;

@@ -23,6 +23,7 @@ src/                         the interface (TypeScript, no framework)
   ui/                        the three columns, every sheet, the console
   ui/diff-view.ts            the word-level change view: dot tooltip, Commit and Rollback sheets
   ui/resize.ts               draggable column edges, remembered per device
+  ui/side-foot.ts            the footer under both side columns: Settings, night vision, console
   ui/rollback.ts             the Rollback sheet
   editor/editor.ts           CodeMirror setup
   editor/keymap.ts           the shortcut table (also drives Settings → Shortcuts)

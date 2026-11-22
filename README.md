@@ -32,8 +32,11 @@ one), how many files have changed, how many commits are ahead of or behind
 GitHub, and the last commit. The selected card has Pull, Commit, Push, Open
 site and a menu with the repository's settings, AI site detection, **Roll
 back** (to the last remote commit, or to the last local commit), Open on
-GitHub and Remove. **Add Repo** is always last. **Settings** is the gear in the
-lower-left corner; beside it are **Night vision** and the **Console** button.
+GitHub and Remove. **Add Repo** is always last.
+
+**Settings** is the gear in the lower-left corner; beside it are **Night
+vision** and the **Console** button. They are in a footer the repositories and
+Files columns share, so they stay in reach when the repositories are hidden.
 
 **Files.** The folders you chose, each listing its markdown files newest
 first, with titles from frontmatter and a dot for anything changed. Rest the

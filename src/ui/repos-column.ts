@@ -1,6 +1,8 @@
 // Column 1: the repositories, as cards. A card says which branch is checked
 // out, what has changed here, how far this copy is from GitHub, and what was
 // last committed; the active card carries the pull / commit / push buttons.
+// Settings, night vision and the console are in the footer it shares with
+// the Files column (side-foot.ts).
 
 import { ago, h, icon, iconButton, replace } from "../lib/dom";
 import { emit, on, store } from "../lib/store";
@@ -11,36 +13,13 @@ import { openMenu, type MenuItem } from "./menu";
 import { openAddRepo } from "./add-repo";
 import { openCommit } from "./commit";
 import { openRepoSettings } from "./repo-settings";
-import { openSettings } from "./settings";
-import { consoleButton } from "./console";
 import { confirmModal, promptModal } from "./modal";
 import { toast } from "./toast";
-import { log } from "../lib/log";
 import { openRollback } from "./rollback";
 import { resizeHandle } from "./resize";
 
-/** Night vision on or off, from the button beside Settings or from Settings. */
-export function setNightVision(on: boolean) {
-  store.settings.appearance.nightVision = on;
-  void actions.saveSettings();
-}
-
-function nightButton(): HTMLButtonElement {
-  const btn = iconButton("night", "Night vision", () => setNightVision(!store.settings.appearance.nightVision));
-  const draw = () => {
-    const active = !!store.settings.appearance.nightVision;
-    btn.classList.toggle("on", active);
-    btn.setAttribute("aria-pressed", String(active));
-    btn.title = active ? "Night vision is on: press for colour" : "Night vision: red only, no blue light";
-  };
-  on("settings", draw);
-  draw();
-  return btn;
-}
-
 export function reposColumn(): HTMLElement {
   const body = h("div", { class: "column-body" });
-  const offline = h("span", { class: "pill warn", hidden: true, title: "Editing and committing work offline. Pull and push wait for the network." }, icon("cloudoff", 12), "Offline");
   const col = h(
     "section",
     { class: "column col-repos", "aria-label": "Repositories" },
@@ -51,20 +30,10 @@ export function reposColumn(): HTMLElement {
       iconButton("x", "Close", () => actions.setLayout({ drawer: false }), { class: "icon-btn only-narrow" }),
     ),
     body,
-    h(
-      "div",
-      { class: "column-foot" },
-      iconButton("gear", "Settings (⌘,)", () => openSettings()),
-      nightButton(),
-      consoleButton(),
-      h("span", { style: "flex:1" }),
-      offline,
-    ),
     resizeHandle("repos"),
   );
 
   const render = () => {
-    offline.hidden = store.online;
     replace(
       body,
       store.repos.map(card),
@@ -75,16 +44,6 @@ export function reposColumn(): HTMLElement {
     );
   };
   on(["repos", "status"], render);
-  window.addEventListener("online", () => {
-    store.online = true;
-    log.info("app", "Back online");
-    render();
-  });
-  window.addEventListener("offline", () => {
-    store.online = false;
-    log.warn("app", "Offline — editing and committing carry on; pull and push wait for the network");
-    render();
-  });
   render();
   return col;
 }

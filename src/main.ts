@@ -32,10 +32,11 @@ import { consolePanel, toggleConsole } from "./ui/console";
 import { listenForLogs } from "./lib/ipc";
 import { log } from "./lib/log";
 import { restoreWidths } from "./ui/resize";
+import { sideFooter } from "./ui/side-foot";
 
 const app = document.getElementById("app")!;
 const scrim = h("div", { class: "drawer-scrim", onclick: () => actions.setLayout({ drawer: false }) });
-app.append(reposColumn(), filesColumn(), editorColumn(), scrim);
+app.append(reposColumn(), filesColumn(), sideFooter(), editorColumn(), scrim);
 restoreWidths();
 document.body.appendChild(consolePanel());
 void listenForLogs();
