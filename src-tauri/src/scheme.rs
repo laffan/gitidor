@@ -138,7 +138,17 @@ pub fn rewrite_origin(text: &str, host: &str) -> String {
     out
 }
 
+/// Reports where a click on the page's text landed: the text of its block
+/// (paragraph, heading, list item) before and after the caret, and how far
+/// through the page it is. The app finds that text in the markdown and moves
+/// the editor there. The same function runs in the draft preview: it must
+/// stay identical to `LOCATE_JS` in `src/ui/preview.ts` (a test checks).
+pub const LOCATE_JS: &str = r#"function gitidorLocate(e,post){if(e.button!==0||e.defaultPrevented)return;var s=window.getSelection&&getSelection();if(s&&!s.isCollapsed)return;var t=e.target;if(!t||!t.closest||t.closest("a,button,input,textarea,select,label,summary,video,audio,[contenteditable]"))return;var n=null,o=0,r;if(document.caretRangeFromPoint){r=document.caretRangeFromPoint(e.clientX,e.clientY);if(r){n=r.startContainer;o=r.startOffset;}}else if(document.caretPositionFromPoint){r=document.caretPositionFromPoint(e.clientX,e.clientY);if(r){n=r.offsetNode;o=r.offset;}}if(!n||n.nodeType!==3||!document.body)return;var b=n.parentElement;b=b&&(b.closest("p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,td,th,dt,dd,figcaption,caption")||b);if(!b)return;function upto(el,before){var g=document.createRange();g.selectNodeContents(el);if(before)g.setEnd(n,o);else g.setStart(n,o);return g.toString();}var all=document.body.textContent.length||1;post({type:"locate",before:upto(b,1).slice(-400),after:upto(b,0).slice(0,400),ratio:upto(document.body,1).length/all});}"#;
+
 /// The navigation script, first thing in `<head>` so it runs before the page.
+///
+/// Besides the path, `nav` carries the page's text, so the app can tell
+/// whether the open post's latest version is on it yet.
 pub fn inject(html: &str, id: &str, path: &str, redirected: bool) -> String {
     let path_json = serde_json::to_string(path).unwrap_or_else(|_| "\"/\"".into());
     let base = if redirected { format!("<base href=\"gitidor://live.{id}{}\">", html_attr(path)) } else { String::new() };
@@ -146,7 +156,9 @@ pub fn inject(html: &str, id: &str, path: &str, redirected: bool) -> String {
         r#"{base}<script>(function(){{
 var P={path_json};
 function post(m){{try{{parent.postMessage(Object.assign({{gitidor:1}},m),"*");}}catch(e){{}}}}
-function nav(){{post({{type:"nav",path:P+location.search,title:document.title}});}}
+function nav(){{post({{type:"nav",path:P+location.search,title:document.title,text:document.body?document.body.innerText.slice(0,300000):""}});}}
+{LOCATE_JS}
+document.addEventListener("click",function(e){{gitidorLocate(e,post);}});
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",nav);else nav();
 addEventListener("message",function(e){{var d=e.data||{{}};if(!d.gitidor)return;
 if(d.type==="back")history.back();if(d.type==="forward")history.forward();if(d.type==="reload")location.reload();}});
@@ -270,6 +282,7 @@ mod tests {
         let title = out.find("<title>").unwrap();
         assert!(head < script && script < title);
         assert!(out.contains(r#"var P="/blog/x/";"#));
+        assert!(out.contains(LOCATE_JS));
         assert!(!out.contains("<base"));
         let redirected = inject("<head></head>", "abc", "/blog/x/", true);
         assert!(redirected.contains(r#"<base href="gitidor://live.abc/blog/x/">"#));

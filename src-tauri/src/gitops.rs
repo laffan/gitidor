@@ -20,7 +20,8 @@
 
 use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{
-    AutotagOption, BranchType, Cred, CredentialType, DiffFormat, DiffOptions, FetchOptions, ProxyOptions, PushOptions, RemoteCallbacks, Repository, Signature, Sort, Status, StatusOptions,
+    AutotagOption, BranchType, Cred, CredentialType, Delta, DiffFormat, DiffOptions, FetchOptions, ProxyOptions, PushOptions, RemoteCallbacks, Repository, ResetType, Signature, Sort, Status,
+    StatusOptions,
 };
 use serde::Serialize;
 use std::cell::{Cell, RefCell};
@@ -68,6 +69,9 @@ pub struct RepoStatus {
     /// never pushed has none, and every commit on it counts as ahead.
     pub has_upstream: bool,
     pub changes: Vec<Change>,
+    /// Files the commits GitHub does not have yet change, so the live preview
+    /// can say which posts are not on the site.
+    pub unpushed: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,6 +283,14 @@ pub fn status(repo: &Repository) -> Result<RepoStatus, String> {
         (Some(local), None) => (count_commits(repo, local.id()), 0),
         (None, _) => (0, 0),
     };
+    let unpushed = match (&head_commit, upstream) {
+        (Some(local), Some(remote)) if ahead > 0 => repo
+            .merge_base(local.id(), remote)
+            .ok()
+            .map(|base| changed_between(repo, Some(base), local.id()))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     Ok(RepoStatus {
         branch,
         head: head_commit.as_ref().map(commit_info),
@@ -286,7 +298,23 @@ pub fn status(repo: &Repository) -> Result<RepoStatus, String> {
         behind,
         has_upstream: upstream.is_some(),
         changes: changes(repo)?,
+        unpushed,
     })
+}
+
+/// The paths that differ between two commits' trees (`None`: an empty tree).
+fn changed_between(repo: &Repository, from: Option<git2::Oid>, to: git2::Oid) -> Vec<String> {
+    let tree = |oid: git2::Oid| repo.find_commit(oid).and_then(|c| c.tree()).ok();
+    let Some(new) = tree(to) else { return Vec::new() };
+    let old = from.and_then(tree);
+    let Ok(diff) = repo.diff_tree_to_tree(old.as_ref(), Some(&new), None) else { return Vec::new() };
+    let mut out: Vec<String> = diff
+        .deltas()
+        .filter_map(|d| d.new_file().path().or_else(|| d.old_file().path()).map(|p| p.to_string_lossy().into_owned()))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn count_commits(repo: &Repository, from: git2::Oid) -> usize {
@@ -331,6 +359,24 @@ pub fn diff(repo: &Repository, path: &str) -> Result<String, String> {
     .or_else(|e| if out.len() > 200_000 { Ok(()) } else { Err(e) })
     .map_err(err)?;
     Ok(out)
+}
+
+/// One file as it is in a commit (`HEAD`, `origin/main`, an id): `None` when
+/// that commit does not have it. For the word-level change views, which
+/// compare it with the file on disk.
+pub fn show(repo: &Repository, rev: &str, path: &str) -> Result<Option<String>, String> {
+    let rel = crate::store::safe_relative(path)?;
+    let Ok(object) = repo.revparse_single(rev) else { return Ok(None) };
+    let tree = object.peel_to_tree().map_err(err)?;
+    let Ok(entry) = tree.get_path(&rel) else { return Ok(None) };
+    let blob = entry.to_object(repo).and_then(|o| o.peel_to_blob()).map_err(err)?;
+    if blob.is_binary() {
+        return Err(format!("{path} is not text"));
+    }
+    if blob.size() > 4 * 1024 * 1024 {
+        return Err(format!("{path} is too large to compare"));
+    }
+    Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
 }
 
 // ── network: fetch, pull, push ──────────────────────────────────────────────
@@ -625,6 +671,106 @@ pub fn discard(repo: &Repository, path: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ── rollback ────────────────────────────────────────────────────────────────
+
+/// What rolling back would do, for the sheet that asks first.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackPlan {
+    /// `local` (the last commit here) or `remote` (GitHub's branch, as last fetched).
+    pub to: String,
+    /// The commit the branch and every file go back to.
+    pub target: CommitInfo,
+    /// HEAD when the plan was made; the rollback refuses if it has moved.
+    pub head: String,
+    /// What the lost files are shown against: HEAD for a local rollback, the
+    /// commit this branch and GitHub's last shared for a remote one, so that
+    /// commits GitHub has and this copy does not are not counted as losses.
+    pub base: String,
+    /// Commits that would be lost, newest first.
+    pub commits: Vec<CommitInfo>,
+    /// Files whose changes would be lost, committed or not.
+    pub files: Vec<Change>,
+}
+
+fn rollback_target<'r>(repo: &'r Repository, to: &str) -> Result<git2::Commit<'r>, String> {
+    match to {
+        "local" => repo.head().and_then(|h| h.peel_to_commit()).map_err(|_| "There is no commit to go back to yet".to_string()),
+        "remote" => {
+            let branch = current_branch(repo);
+            repo.find_reference(&format!("refs/remotes/origin/{branch}"))
+                .and_then(|r| r.peel_to_commit())
+                .map_err(|_| format!("{branch} is not on GitHub yet, so there is no remote commit to go back to"))
+        }
+        other => Err(format!("Unknown rollback target {other}")),
+    }
+}
+
+pub fn rollback_plan(repo: &Repository, to: &str) -> Result<RollbackPlan, String> {
+    let target = rollback_target(repo, to)?;
+    let head = repo.head().and_then(|h| h.peel_to_commit()).map_err(err)?;
+    let base = if to == "local" { head.id() } else { repo.merge_base(head.id(), target.id()).map_err(err)? };
+
+    let mut commits = Vec::new();
+    if head.id() != target.id() {
+        let mut walk = repo.revwalk().map_err(err)?;
+        walk.push(head.id()).map_err(err)?;
+        walk.hide(target.id()).map_err(err)?;
+        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME).map_err(err)?;
+        for oid in walk.take(500) {
+            if let Ok(c) = oid.and_then(|o| repo.find_commit(o)) {
+                commits.push(commit_info(&c));
+            }
+        }
+    }
+
+    let base_tree = repo.find_commit(base).and_then(|c| c.tree()).map_err(err)?;
+    let mut options = DiffOptions::new();
+    options.include_untracked(true).recurse_untracked_dirs(true).include_ignored(false);
+    let diff = repo.diff_tree_to_workdir_with_index(Some(&base_tree), Some(&mut options)).map_err(err)?;
+    let mut files = Vec::new();
+    for delta in diff.deltas() {
+        let kind = match delta.status() {
+            Delta::Added | Delta::Untracked | Delta::Copied => "added",
+            Delta::Deleted => "deleted",
+            Delta::Renamed => "renamed",
+            Delta::Conflicted => "conflicted",
+            Delta::Modified | Delta::Typechange => "modified",
+            _ => continue,
+        };
+        let path = delta.new_file().path().or_else(|| delta.old_file().path());
+        if let Some(path) = path {
+            files.push(Change { path: path.to_string_lossy().into_owned(), kind: kind.into() });
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(RollbackPlan { to: to.into(), target: commit_info(&target), head: head.id().to_string(), base: base.to_string(), commits, files })
+}
+
+/// Put the branch and the working tree back at the plan's target: committed
+/// and uncommitted changes go, and so do new files git is not ignoring. It
+/// refuses when HEAD or the target has moved since the plan was shown.
+pub fn rollback(repo: &Repository, to: &str, expect_head: &str, expect_target: &str) -> Result<CommitInfo, String> {
+    let target = rollback_target(repo, to)?;
+    let head = repo.head().and_then(|h| h.peel_to_commit()).map_err(err)?;
+    if head.id().to_string() != expect_head || target.id().to_string() != expect_target {
+        return Err("Something changed since the list was made. Look at it again before rolling back.".into());
+    }
+    // Reset alone keeps untracked files, and libgit2's hard reset replaces
+    // whatever checkout strategy it is given; so check out first, removing
+    // untracked files, then move the branch.
+    let mut checkout = CheckoutBuilder::new();
+    checkout.force().remove_untracked(true);
+    repo.checkout_tree(target.as_object(), Some(&mut checkout)).map_err(err)?;
+    repo.reset(target.as_object(), ResetType::Hard, None).map_err(err)?;
+    let info = commit_info(&target);
+    events::info(
+        "git",
+        format!("Rolled {} back to {} “{}”{}", current_branch(repo), info.short, info.summary, if to == "remote" { ", GitHub's last known commit" } else { "" }),
+    );
+    Ok(info)
+}
+
 // ── branches ────────────────────────────────────────────────────────────────
 
 pub fn branches(repo: &Repository) -> Result<Branches, String> {
@@ -901,6 +1047,88 @@ mod tests {
         assert_eq!(current_branch(&repo), branch);
         fetch(&repo, Some(&branch), None).unwrap();
         assert_eq!(status(&repo).unwrap().behind, 0);
+    }
+
+    #[test]
+    fn show_reads_a_file_at_a_commit() {
+        let (_bare, url) = origin();
+        let a = clone_of(&url, "show");
+        write(&a, "posts/hello.md", "changed\n");
+        assert_eq!(show(&a, "HEAD", "posts/hello.md").unwrap().as_deref(), Some("---\ntitle: Hello\n---\nHi\n"));
+        assert_eq!(show(&a, "origin/main", "posts/hello.md").unwrap().as_deref(), Some("---\ntitle: Hello\n---\nHi\n"));
+        assert_eq!(show(&a, "HEAD", "posts/missing.md").unwrap(), None);
+        assert_eq!(show(&a, "no-such-rev", "posts/hello.md").unwrap(), None);
+        assert!(show(&a, "HEAD", "../outside").is_err());
+    }
+
+    #[test]
+    fn status_lists_the_files_unpushed_commits_change() {
+        let (_bare, url) = origin();
+        let a = clone_of(&url, "unpushed");
+        write(&a, "posts/one.md", "1");
+        commit_all(&a, "one", &who()).unwrap();
+        write(&a, "posts/hello.md", "edited");
+        let st = status(&a).unwrap();
+        assert_eq!(st.unpushed, vec!["posts/one.md".to_string()]);
+        push(&a, None).unwrap();
+        assert!(status(&a).unwrap().unpushed.is_empty());
+    }
+
+    #[test]
+    fn rollback_to_the_last_local_commit_drops_every_uncommitted_change() {
+        let (_bare, url) = origin();
+        let a = clone_of(&url, "rb-local");
+        let root = a.workdir().unwrap().to_path_buf();
+        fs::write(root.join(".gitignore"), "cache/\n").unwrap();
+        commit_all(&a, "ignore cache", &who()).unwrap();
+        write(&a, "posts/hello.md", "edited\n");
+        write(&a, "posts/new.md", "new\n");
+        write(&a, "cache/keep.txt", "ignored\n");
+
+        let plan = rollback_plan(&a, "local").unwrap();
+        assert!(plan.commits.is_empty());
+        assert_eq!(
+            plan.files,
+            vec![
+                Change { path: "posts/hello.md".into(), kind: "modified".into() },
+                Change { path: "posts/new.md".into(), kind: "added".into() },
+            ]
+        );
+        rollback(&a, "local", &plan.head, &plan.target.id).unwrap();
+        assert!(status(&a).unwrap().changes.is_empty());
+        assert_eq!(fs::read_to_string(root.join("posts/hello.md")).unwrap(), "---\ntitle: Hello\n---\nHi\n");
+        assert!(!root.join("posts/new.md").exists());
+        assert!(root.join("cache/keep.txt").exists(), "an ignored file was removed");
+    }
+
+    #[test]
+    fn rollback_to_the_remote_drops_unpushed_commits_and_refuses_a_stale_plan() {
+        let (_bare, url) = origin();
+        let a = clone_of(&url, "rb-remote");
+        let root = a.workdir().unwrap().to_path_buf();
+        write(&a, "posts/one.md", "1");
+        commit_all(&a, "one", &who()).unwrap();
+        write(&a, "posts/hello.md", "edited\n");
+
+        let plan = rollback_plan(&a, "remote").unwrap();
+        assert_eq!(plan.commits.len(), 1);
+        assert_eq!(plan.commits[0].summary, "one");
+        assert_eq!(plan.files.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(), vec!["posts/hello.md", "posts/one.md"]);
+        assert_eq!(show(&a, &plan.base, "posts/one.md").unwrap(), None);
+
+        // Something moved after the plan was shown: nothing is touched.
+        write(&a, "posts/two.md", "2");
+        commit_all(&a, "two", &who()).unwrap();
+        assert!(rollback(&a, "remote", &plan.head, &plan.target.id).is_err());
+        assert!(root.join("posts/two.md").exists());
+
+        let plan = rollback_plan(&a, "remote").unwrap();
+        assert_eq!(plan.commits.len(), 2);
+        rollback(&a, "remote", &plan.head, &plan.target.id).unwrap();
+        let st = status(&a).unwrap();
+        assert_eq!((st.ahead, st.behind, st.changes.len()), (0, 0, 0));
+        assert!(!root.join("posts/one.md").exists());
+        assert!(rollback_plan(&a, "nowhere").is_err());
     }
 
     #[test]

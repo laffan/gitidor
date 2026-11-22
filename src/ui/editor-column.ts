@@ -10,7 +10,9 @@ import { imageDirectory, imageReference, publicAddress } from "../lib/site";
 import { createEditor, type EditorAppearance, type EditorHandle } from "../editor/editor";
 import { previewPane } from "./preview";
 import { assetUrl } from "./asset-url";
+import { resizeHandle } from "./resize";
 import { log } from "../lib/log";
+import { locate } from "../lib/locate";
 
 let editor: EditorHandle | null = null;
 export const getEditor = () => editor;
@@ -27,7 +29,14 @@ export function editorColumn(): HTMLElement {
     { class: "editor-empty" },
     h("div", null, h("div", { class: "big" }, "Choose a post"), "or make a new one from a folder's menu.", h("div", { style: "margin-top:14px" }, h("span", { class: "kbd" }, "⌘N"), " new post   ", h("span", { class: "kbd" }, "⌘\\"), " columns   ", h("span", { class: "kbd" }, "⇧⌘P"), " preview")),
   );
-  const preview = previewPane();
+  // A click on the preview's text puts the caret on the same words here.
+  const preview = previewPane((click) => {
+    if (!editor || !store.openFile) return;
+    const pos = locate(editor.view.state.doc.toString(), click);
+    if (pos === null) log.debug("app", `No match in the text for the clicked words “${(click.before.slice(-30) + click.after.slice(0, 30)).trim()}”`);
+    else editor.revealAt(pos);
+  });
+  preview.el.appendChild(resizeHandle("preview"));
   const split = h("div", { class: "editor-split" }, host, preview.el);
   const words = h("span");
   const where = h("span");
@@ -45,11 +54,6 @@ export function editorColumn(): HTMLElement {
   host.appendChild(empty);
   // For the browser harness in development; never in a build.
   if (import.meta.env.DEV) (window as unknown as { __gitidorEditor: EditorHandle }).__gitidorEditor = editor;
-  editor.view.scrollDOM.addEventListener("scroll", () => {
-    const s = editor!.view.scrollDOM;
-    const max = s.scrollHeight - s.clientHeight;
-    preview.scrollTo(max > 0 ? s.scrollTop / max : 0);
-  });
 
   let loadedKey = "";
   function load() {
@@ -127,17 +131,27 @@ export function editorColumn(): HTMLElement {
   );
 }
 
-export function togglePreview(mode?: "draft" | "live") {
-  if (!store.openFile) return;
-  if (mode && store.preview.open && store.preview.mode !== mode) store.preview.mode = mode;
-  else store.preview.open = !store.preview.open;
-  if (mode) store.preview.mode = mode;
+/** Show or hide the preview. It opens on the live site, or on the draft
+ *  when the repository has no public address to show. */
+export function togglePreview() {
+  const f = store.openFile;
+  if (!f) return;
+  store.preview.open = !store.preview.open;
+  if (store.preview.open) store.preview.mode = repoById(f.repoId)?.publicUrl ? "live" : "draft";
   emit("preview");
 }
 
+/** What ⌘\ hid, so showing the columns again brings back those, not both. */
+let hiddenColumns: { repos: boolean; files: boolean } | null = null;
+
 export function toggleColumns() {
-  const both = store.layout.repos || store.layout.files;
-  actions.setLayout({ repos: !both, files: !both });
+  if (store.layout.repos || store.layout.files) {
+    hiddenColumns = { repos: store.layout.repos, files: store.layout.files };
+    actions.setLayout({ repos: false, files: false });
+  } else {
+    actions.setLayout(hiddenColumns ?? { repos: false, files: true });
+    hiddenColumns = null;
+  }
 }
 
 async function importImage(repoId: string, postPath: string, file: File): Promise<string> {

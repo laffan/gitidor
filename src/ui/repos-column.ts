@@ -16,6 +16,27 @@ import { consoleButton } from "./console";
 import { confirmModal, promptModal } from "./modal";
 import { toast } from "./toast";
 import { log } from "../lib/log";
+import { openRollback } from "./rollback";
+import { resizeHandle } from "./resize";
+
+/** Night vision on or off, from the button beside Settings or from Settings. */
+export function setNightVision(on: boolean) {
+  store.settings.appearance.nightVision = on;
+  void actions.saveSettings();
+}
+
+function nightButton(): HTMLButtonElement {
+  const btn = iconButton("night", "Night vision", () => setNightVision(!store.settings.appearance.nightVision));
+  const draw = () => {
+    const active = !!store.settings.appearance.nightVision;
+    btn.classList.toggle("on", active);
+    btn.setAttribute("aria-pressed", String(active));
+    btn.title = active ? "Night vision is on: press for colour" : "Night vision: red only, no blue light";
+  };
+  on("settings", draw);
+  draw();
+  return btn;
+}
 
 export function reposColumn(): HTMLElement {
   const body = h("div", { class: "column-body" });
@@ -34,10 +55,12 @@ export function reposColumn(): HTMLElement {
       "div",
       { class: "column-foot" },
       iconButton("gear", "Settings (⌘,)", () => openSettings()),
+      nightButton(),
       consoleButton(),
       h("span", { style: "flex:1" }),
       offline,
     ),
+    resizeHandle("repos"),
   );
 
   const render = () => {
@@ -162,6 +185,7 @@ function card(repo: RepoRecord): HTMLElement {
 }
 
 function repoMenu(repo: RepoRecord): MenuItem[] {
+  const status = store.status[repo.id];
   const aiReady =
     (store.settings.ai.provider === "anthropic" && store.secrets.hasAnthropicKey) ||
     (store.settings.ai.provider === "openai" && store.secrets.hasOpenaiKey);
@@ -174,6 +198,25 @@ function repoMenu(repo: RepoRecord): MenuItem[] {
       run: () => void detectWithAi(repo.id),
     },
     { label: "Check GitHub for changes", icon: "refresh", run: () => void actions.fetchRepo(repo.id) },
+    {
+      label: "Roll back",
+      icon: "undo",
+      submenu: [
+        {
+          label: "To last remote commit",
+          icon: "github",
+          disabled: !status?.hasUpstream || (!status.ahead && !status.changes.length),
+          title: !status?.hasUpstream ? "This branch is not on GitHub yet" : undefined,
+          run: () => void openRollback(repo.id, "remote"),
+        },
+        {
+          label: "To last local commit",
+          icon: "commit",
+          disabled: !status?.changes.length,
+          run: () => void openRollback(repo.id, "local"),
+        },
+      ],
+    },
     { separator: true },
     { label: "Open on GitHub", icon: "github", run: () => void openExternal(`https://github.com/${repo.owner}/${repo.repo}`) },
     { label: "Open the site", icon: "globe", disabled: !repo.publicUrl, run: () => void openExternal(repo.publicUrl) },

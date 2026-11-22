@@ -1,22 +1,28 @@
 // The preview beside the editor, two ways:
 //
+// - **Live** (what it opens to): the published site, through the
+//   `gitidor://live.<id>` proxy. It shows what is pushed and built, and as you
+//   click around it says which source file each page came from, with a button
+//   to open it. A note says when the open post has changes the site cannot
+//   have yet: not pushed, or pushed and not rebuilt.
 // - **Draft**: the open file rendered here, as typed, with images found
 //   through the site profile. Works offline; updates as you type.
-// - **Live**: the published site, through the `gitidor://live.<id>` proxy.
-//   It shows what is pushed and built, and as you click around it says which
-//   source file each page came from, with a button to open it.
+//
+// Clicking text in either moves the editor to the same words.
 //
 // Both run in a sandboxed frame without `allow-same-origin`: the page's own
 // scripts get an opaque origin and cannot reach the app.
 
 import MarkdownIt from "markdown-it";
-import { h, icon, iconButton } from "../lib/dom";
+import { ago, h, icon, iconButton } from "../lib/dom";
 import { api, inTauri, openExternal } from "../lib/ipc";
 import { knownFile, on, repoById, store } from "../lib/store";
 import * as actions from "../lib/actions";
 import { parseFrontmatter } from "../lib/frontmatter";
 import { liveUrl, publicAddress, splitPublicUrl } from "../lib/site";
 import { isDark, onThemeChange } from "../lib/theme";
+import type { Clicked } from "../lib/locate";
+import { pageShows } from "../lib/published";
 import { assetUrl } from "./asset-url";
 
 const md = new MarkdownIt({ html: true, linkify: true, typographer: true });
@@ -41,44 +47,62 @@ mark{background:rgba(255,214,10,.4);color:inherit}
 .missing{display:inline-block;padding:6px 10px;border:1px dashed var(--line);border-radius:4px;color:var(--muted);font:13px -apple-system,system-ui,sans-serif}
 .fm-error{font:13px -apple-system,system-ui,sans-serif;background:#fdecec;color:#a32020;padding:8px 10px;border-radius:6px;margin-bottom:1.5em}`;
 
+/**
+ * Reports where a click on the page's text landed (see `lib/locate.ts`).
+ * Must stay identical to `LOCATE_JS` in `src-tauri/src/scheme.rs`, which puts
+ * the same function in live pages; a test checks.
+ */
+export const LOCATE_JS = String.raw`function gitidorLocate(e,post){if(e.button!==0||e.defaultPrevented)return;var s=window.getSelection&&getSelection();if(s&&!s.isCollapsed)return;var t=e.target;if(!t||!t.closest||t.closest("a,button,input,textarea,select,label,summary,video,audio,[contenteditable]"))return;var n=null,o=0,r;if(document.caretRangeFromPoint){r=document.caretRangeFromPoint(e.clientX,e.clientY);if(r){n=r.startContainer;o=r.startOffset;}}else if(document.caretPositionFromPoint){r=document.caretPositionFromPoint(e.clientX,e.clientY);if(r){n=r.offsetNode;o=r.offset;}}if(!n||n.nodeType!==3||!document.body)return;var b=n.parentElement;b=b&&(b.closest("p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,td,th,dt,dd,figcaption,caption")||b);if(!b)return;function upto(el,before){var g=document.createRange();g.selectNodeContents(el);if(before)g.setEnd(n,o);else g.setStart(n,o);return g.toString();}var all=document.body.textContent.length||1;post({type:"locate",before:upto(b,1).slice(-400),after:upto(b,0).slice(0,400),ratio:upto(document.body,1).length/all});}`;
+
 const FRAME_SCRIPT = `
+${LOCATE_JS}
+function up(m){m.gitidor=1;parent.postMessage(m,"*");}
 addEventListener("message",function(e){var d=e.data||{};if(d.gitidor!=="draft")return;
 if(d.theme)document.documentElement.dataset.theme=d.theme;
-if(d.css!==undefined)document.getElementById("site").innerHTML=d.css;
-if(d.html!==undefined)document.getElementById("doc").innerHTML=d.html;
-if(d.scroll!==undefined){var m=document.documentElement.scrollHeight-innerHeight;scrollTo(0,m*d.scroll);}});
-document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href]");if(!a)return;e.preventDefault();
-if(/^https?:|^mailto:/.test(a.href))parent.postMessage({gitidor:1,type:"external",url:a.href},"*");});
-parent.postMessage({gitidor:1,type:"draft-ready"},"*");`;
+if(d.html!==undefined)document.getElementById("doc").innerHTML=d.html;});
+document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href]");
+if(a){e.preventDefault();if(/^https?:|^mailto:/.test(a.href))up({type:"external",url:a.href});return;}
+gitidorLocate(e,up);});
+up({type:"draft-ready"});`;
+
+/** A post as a reader sees it: the title and the rendered body's text. */
+export function readerText(markdown: string): string {
+  const fm = parseFrontmatter(markdown);
+  const bodyText = fm ? markdown.slice(fm.end) : markdown;
+  const title = typeof fm?.data.title === "string" ? `${fm.data.title}\n` : "";
+  const doc = new DOMParser().parseFromString(md.render(bodyText), "text/html");
+  return title + (doc.body.textContent ?? "");
+}
+
+/** How long after a push the live preview keeps checking for the rebuild. */
+const REBUILD_WINDOW = 15 * 60 * 1000;
 
 export interface Preview {
   el: HTMLElement;
   update(): void;
-  scrollTo(ratio: number): void;
 }
 
-export function previewPane(): Preview {
+/** `onLocate` hears clicks on the open post's text, in either mode. */
+export function previewPane(onLocate: (click: Clicked) => void): Preview {
   const draftTab = h("button", { type: "button", onclick: () => setMode("draft") }, "Draft");
   const liveTab = h("button", { type: "button", onclick: () => setMode("live") }, "Live");
   const back = iconButton("back", "Back", () => post({ type: "back" }));
   const forward = iconButton("forward", "Forward", () => post({ type: "forward" }));
-  const reload = iconButton("refresh", "Reload", () => (store.preview.mode === "live" ? post({ type: "reload" }) : renderDraft(true)));
+  const reload = iconButton("refresh", "Reload", () => post({ type: "reload" }));
   const address = h("div", { class: "address" }, h("span"));
   const external = iconButton("external", "Open in the browser", () => {
     const repo = repoById(store.openFile?.repoId ?? "");
     const url = store.preview.mode === "live" && repo ? publicAddress(repo, livePath) : currentPublicAddress();
     if (url) void openExternal(url);
   });
-  const siteCss = h("input", { type: "checkbox", class: "switch", title: "Use the site's stylesheets" });
-  const siteCssLabel = h("label", { class: "row", style: "gap:6px;color:var(--text-2);font-size:11.5px;margin-left:4px", title: "Borrow the site's CSS (from Repository settings → Stylesheets)" }, siteCss, "Site CSS");
-  siteCss.addEventListener("change", () => renderDraft(true));
   const editThis = h("button", { class: "btn small", type: "button", hidden: true }, icon("edit", 14), "Edit this post");
+  const spacer = h("span", { style: "flex:1" });
   const note = h("div", { class: "preview-note" });
   const frameBox = h("div", { class: "preview-frame" });
   const el = h(
     "aside",
     { class: "preview", hidden: true, "aria-label": "Preview" },
-    h("div", { class: "preview-bar" }, h("div", { class: "segmented" }, draftTab, liveTab), back, forward, reload, address, editThis, siteCssLabel, external),
+    h("div", { class: "preview-bar" }, h("div", { class: "segmented" }, liveTab, draftTab), back, forward, reload, address, spacer, editThis, external),
     frameBox,
     note,
   );
@@ -90,9 +114,14 @@ export function previewPane(): Preview {
   let draftReady = false;
   let pending: Record<string, unknown> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let lastCssKey = "";
   /** The file the live page last mapped to, so the button can hide once it is open. */
   let lastHit: { repoId: string; path: string } | null = null;
+  /** The source file of the page the live frame shows, when it is known. */
+  let pageFile: string | null = null;
+  /** The path the live frame was opened at, for the open file. */
+  let openedPath = "";
+  /** The live page's text, as its script last reported it. */
+  let pageText: string | null = null;
 
   function post(msg: Record<string, unknown>) {
     frame?.contentWindow?.postMessage({ gitidor: store.preview.mode === "draft" ? "draft" : 1, ...msg }, "*");
@@ -116,20 +145,20 @@ export function previewPane(): Preview {
     frame = h("iframe", { sandbox: "allow-scripts allow-forms", referrerpolicy: "no-referrer", title: mode === "draft" ? "Draft preview" : "Live site" });
     frameMode = mode;
     draftReady = false;
-    lastCssKey = "";
+    pageText = null;
     if (mode === "draft") {
-      frame.srcdoc = `<!doctype html><html data-theme="${isDark() ? "dark" : "light"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${DRAFT_CSS}</style><div id="site"></div></head><body><main id="doc"></main><script>${FRAME_SCRIPT}</script></body></html>`;
+      frame.srcdoc = `<!doctype html><html data-theme="${isDark() ? "dark" : "light"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${DRAFT_CSS}</style></head><body><main id="doc"></main><script>${FRAME_SCRIPT}</script></body></html>`;
     } else if (src) {
       frame.src = src;
     }
     frameBox.appendChild(frame);
   }
 
-  function renderDraft(force = false) {
+  function renderDraft() {
     const f = store.openFile;
     const repo = repoById(f?.repoId ?? "");
     if (!f || !repo) return;
-    if (frameMode !== "draft" || frameRepo !== repo.id || force) {
+    if (frameMode !== "draft" || frameRepo !== repo.id) {
       frameRepo = repo.id;
       makeFrame("draft");
     }
@@ -143,16 +172,9 @@ export function previewPane(): Preview {
     }
     if (fm?.error) html = `<div class="fm-error">The frontmatter has an error: ${escapeHtml(fm.error)}</div>${html}`;
     html = rewriteImages(html, (src) => assetUrl(repo, f.path, src));
-    const useSite = siteCss.checked && (repo.site?.stylesheets.length ?? 0) > 0;
-    const cssKey = useSite ? (repo.site?.stylesheets.join(",") ?? "") : "";
     const msg: Record<string, unknown> = { html, theme: isDark() ? "dark" : "light" };
-    if (cssKey !== lastCssKey) {
-      msg.css = useSite ? repo.site!.stylesheets.map((p) => `<link rel="stylesheet" href="${assetUrl(repo, "", `/${p}`, true) ?? ""}">`).join("") : "";
-      lastCssKey = cssKey;
-    }
     if (draftReady) post(msg);
     else pending = msg;
-    address.firstElementChild!.textContent = f.path;
     note.replaceChildren();
   }
 
@@ -172,17 +194,58 @@ export function previewPane(): Preview {
     if (frameMode !== "live" || frameRepo !== repo.id || frame?.dataset.for !== f?.path) {
       frameRepo = repo.id;
       livePath = path;
+      openedPath = path;
+      pageFile = f?.path ?? null;
       makeFrame("live", wanted);
       frame!.dataset.for = f?.path ?? "";
     }
     address.firstElementChild!.textContent = publicAddress(repo, livePath) ?? repo.publicUrl;
-    const st = store.status[repo.id];
-    const unpushed = f && (st?.changes.some((c) => c.path === f.path) || (st?.ahead ?? 0) > 0);
-    note.replaceChildren(
-      ...(entry && !entry.url ? [h("span", null, "This file has no published URL in the site structure; showing the home page.")] : []),
-      ...(unpushed ? [h("span", null, icon("push", 12), " The live site shows what is pushed. This post has changes that are not on it yet.")] : []),
-      ...(!inTauri ? [h("span", null, "Browser mode: “Edit this post” works in the app.")] : []),
-    );
+    drawNote();
+  }
+
+  /**
+   * The line under the live page. It speaks only about the open post, and
+   * only while the frame shows that post's page: the post has changes that
+   * are not pushed (so the site cannot have them), or it was pushed lately
+   * and the page does not show the new version yet (the site is rebuilding).
+   * Redrawn whenever the repository's status changes, so it goes as soon as
+   * a push does, and when the page reports its text, so the rebuild note
+   * goes when the page catches up.
+   */
+  function drawNote() {
+    if (store.preview.mode !== "live" || frameMode !== "live") return;
+    const f = store.openFile;
+    const repo = repoById(frameRepo);
+    const lines: Node[] = [];
+    const onItsPage = !!f && !!repo && f.repoId === repo.id && pageFile === f.path;
+    const entry = f ? knownFile(f.repoId, f.path) : undefined;
+    if (f && entry && !entry.url && livePath === openedPath) lines.push(h("span", null, "This file has no published URL in the site structure; showing the home page."));
+    if (onItsPage && repo && f) {
+      const st = store.status[repo.id];
+      const notPushed = f.text !== f.saved || !st?.hasUpstream || st.changes.some((c) => c.path === f.path) || st.unpushed.includes(f.path);
+      const push = store.pushed[repo.id];
+      if (st && notPushed) {
+        lines.push(h("span", null, icon("push", 12), st.hasUpstream ? " This post has changes that are not pushed yet; the live site shows what is pushed." : ` ${st.branch} is not on GitHub yet; the live site shows what is pushed.`));
+      } else if (push && push.previous.has(f.path) && Date.now() - push.at < REBUILD_WINDOW && pageText !== null) {
+        const before = push.previous.get(f.path) ?? null;
+        if (before === f.text || pageShows(readerText(f.text), before === null ? null : readerText(before), pageText)) {
+          // Seen on the site: nothing more to wait for.
+          push.previous.delete(f.path);
+        } else {
+          lines.push(
+            h(
+              "span",
+              null,
+              icon("refresh", 12),
+              ` Pushed ${ago(push.at)}; the page does not show it yet, so the site may still be rebuilding. `,
+              h("button", { class: "link", type: "button", onclick: () => post({ type: "reload" }) }, "Reload"),
+            ),
+          );
+        }
+      }
+    }
+    if (!inTauri) lines.push(h("span", null, "Browser mode: “Edit this post” works in the app."));
+    note.replaceChildren(...lines);
   }
 
   function update() {
@@ -192,8 +255,8 @@ export function previewPane(): Preview {
     draftTab.classList.toggle("on", store.preview.mode === "draft");
     liveTab.classList.toggle("on", store.preview.mode === "live");
     const live = store.preview.mode === "live";
-    back.hidden = forward.hidden = !live;
-    siteCssLabel.hidden = live;
+    back.hidden = forward.hidden = reload.hidden = address.hidden = !live;
+    spacer.hidden = live;
     const f = store.openFile;
     editThis.hidden = !live || !lastHit || (!!f && f.repoId === lastHit.repoId && f.path === lastHit.path);
     if (!open) return;
@@ -206,7 +269,7 @@ export function previewPane(): Preview {
 
   window.addEventListener("message", async (e) => {
     if (!frame || e.source !== frame.contentWindow) return;
-    const d = (e.data ?? {}) as { gitidor?: unknown; type?: string; path?: string; url?: string; title?: string };
+    const d = (e.data ?? {}) as { gitidor?: unknown; type?: string; path?: string; url?: string; title?: string; text?: string; before?: string; after?: string; ratio?: number };
     if (!d.gitidor) return;
     if (d.type === "draft-ready") {
       draftReady = true;
@@ -214,41 +277,48 @@ export function previewPane(): Preview {
       pending = null;
     } else if (d.type === "external" && d.url) {
       void openExternal(d.url);
+    } else if (d.type === "locate" && typeof d.before === "string" && typeof d.after === "string") {
+      // In the live site, only the open post's own page is worth searching.
+      const f = store.openFile;
+      if (!f || (frameMode === "live" && (pageFile !== f.path || frameRepo !== f.repoId))) return;
+      onLocate({ before: d.before, after: d.after, ratio: typeof d.ratio === "number" ? d.ratio : undefined });
     } else if (d.type === "nav" && typeof d.path === "string") {
       livePath = d.path;
+      pageText = typeof d.text === "string" ? d.text : null;
       const repo = repoById(frameRepo);
       if (!repo) return;
       address.firstElementChild!.textContent = publicAddress(repo, d.path) ?? d.path;
       const hit = await api.siteLookup(repo.id, d.path.split("?")[0]).catch(() => null);
       lastHit = hit ? { repoId: repo.id, path: hit } : null;
+      // The page the frame opened on keeps its file even when the lookup
+      // cannot name one (a redirect, an unusual permalink).
+      const samePage = d.path.split("?")[0].replace(/\/+$/, "") === openedPath.replace(/\/+$/, "");
+      pageFile = hit ?? (samePage ? (frame?.dataset.for ?? null) : null);
       const isOpen = hit && store.openFile?.path === hit && store.openFile.repoId === repo.id;
       editThis.hidden = !hit || !!isOpen;
-      // The note was about the page the frame opened on; this is another one.
-      if (frame?.dataset.for !== hit) note.replaceChildren();
       editThis.onclick = () => {
         if (!hit) return;
         if (frame) frame.dataset.for = hit;
         void actions.openFile(repo.id, hit);
       };
       editThis.title = hit ?? "";
+      drawNote();
     }
   });
 
   on(["file", "preview"], update);
   on("save", () => {
     if (store.preview.open && store.preview.mode === "draft") update();
+    else if (store.preview.open) drawNote();
+  });
+  on("status", () => {
+    if (store.preview.open) drawNote();
   });
   onThemeChange(() => {
     if (frameMode === "draft") post({ theme: isDark() ? "dark" : "light" });
   });
 
-  return {
-    el,
-    update,
-    scrollTo(ratio: number) {
-      if (store.preview.open && store.preview.mode === "draft" && draftReady) post({ scroll: ratio });
-    },
-  };
+  return { el, update };
 }
 
 function escapeHtml(s: string): string {

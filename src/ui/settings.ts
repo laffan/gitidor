@@ -130,6 +130,7 @@ function appearance(): HTMLElement {
       "div",
       { class: "group" },
       opt("Appearance", "System follows the device's light or dark setting.", segmented(a.theme, [["system", "System"], ["light", "Light"], ["dark", "Dark"]], (v) => ((a.theme = v), changed()))),
+      opt("Night vision", "Everything in shades of red, with no blue or green light, for writing in the dark. Best with Dark. Also the eye beside Settings.", toggle(!!a.nightVision, (v) => ((a.nightVision = v), changed()))),
     ),
     h("div", { class: "group-title" }, "Text"),
     h(

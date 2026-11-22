@@ -3,7 +3,7 @@
 
 import { api } from "./ipc";
 import { emit, folderKey, knownFile, repoById, store } from "./store";
-import type { RepoStatus } from "./types";
+import type { RepoStatus, RollbackPlan } from "./types";
 import { toast } from "../ui/toast";
 import { newPostName, newPostText, todayIso } from "./frontmatter";
 import { log } from "./log";
@@ -225,10 +225,42 @@ export async function pull(id: string) {
 
 export async function push(id: string) {
   await gitStep(id, "Pushing…", async () => {
+    const previous = await pushedFrom(id);
     applyStatus(id, await api.push(id));
+    store.pushed[id] = { at: Date.now(), previous };
     await reloadRepos();
     toast("Pushed to GitHub.");
+    emit("preview");
   });
+}
+
+/** The posts a push is about to send, as GitHub has them now, so the live
+ *  preview can tell afterwards whether the site shows the new version yet. */
+async function pushedFrom(id: string): Promise<Map<string, string | null>> {
+  const status = store.status[id];
+  const out = new Map<string, string | null>();
+  if (!status?.hasUpstream) return out;
+  const posts = status.unpushed.filter((p) => /\.(md|markdown|mdx)$/i.test(p)).slice(0, 40);
+  await Promise.all(
+    posts.map(async (p) => {
+      out.set(p, await api.show(id, `origin/${status.branch}`, p).catch(() => null));
+    }),
+  );
+  return out;
+}
+
+/** Roll back as `plan` says; the sheet showed the person what goes. */
+export async function rollback(id: string, plan: RollbackPlan): Promise<boolean> {
+  const ok = await gitStep(id, "Rolling back…", async () => {
+    applyStatus(id, await api.rollback(id, plan));
+    log.info("git", `Rolled back to ${plan.target.short}: ${plan.commits.length} commit${plan.commits.length === 1 ? "" : "s"} and ${plan.files.length} file${plan.files.length === 1 ? "" : "s"} of changes dropped`, id);
+  });
+  if (ok) {
+    await loadFolders(id);
+    await reloadOpenFile(id);
+    toast(`Rolled back to ${plan.target.short} “${plan.target.summary}”.`);
+  }
+  return ok;
 }
 
 export async function commit(id: string, paths: string[], message: string, andPush: boolean): Promise<boolean> {

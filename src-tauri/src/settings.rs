@@ -23,6 +23,8 @@ pub struct Appearance {
     pub frontmatter: String,
     pub inline_images: bool,
     pub spellcheck: bool,
+    /// Everything drawn in shades of red only, for working in the dark.
+    pub night_vision: bool,
 }
 
 impl Default for Appearance {
@@ -37,6 +39,7 @@ impl Default for Appearance {
             frontmatter: "dim".into(),
             inline_images: true,
             spellcheck: true,
+            night_vision: false,
         }
     }
 }

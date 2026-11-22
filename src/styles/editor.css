@@ -210,12 +210,25 @@
 /* ── preview ── */
 
 .preview {
-  flex: 1 1 0;
+  /* Half the width until its edge is dragged (resize.ts sets --preview-w). */
+  flex: 0 0 var(--preview-w, 50%);
   min-width: 0;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--line);
+  border-top: 1px solid var(--line);
   background: var(--bg-files);
+  position: relative;
+}
+
+.preview .resize-preview {
+  left: 0;
+  right: auto;
+}
+
+.preview .resize-preview::after {
+  left: 0;
+  right: auto;
 }
 
 .preview[hidden] {
@@ -292,6 +305,10 @@ html[data-theme="dark"] .preview-frame.draft {
     display: none;
   }
   .preview {
+    flex: 1 1 0;
     border-left: 0;
+  }
+  .preview .resize-preview {
+    display: none;
   }
 }

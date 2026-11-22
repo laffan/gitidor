@@ -25,7 +25,18 @@ Most important first.
    traffic lights by padding when the platform is macOS; the exact spacing has
    not been seen on a Mac.
 
+6. **Clicking text in the live preview** and the live note's page text. The
+   script is the same one that runs in the draft preview, exercised in
+   Chromium; in a live page it has run only against a stand-in page there,
+   not through the proxy in WebKitGTK or WKWebView.
+
 ## Not done
+
+- **Change tooltips on touch.** The word-level changes appear when a pointer
+  rests on a file's dot; a finger cannot hover, so on an iPad without a
+  trackpad they are only in the Commit sheet.
+- **Rolled-back commits** stay in the repository's reflog, but nothing in the
+  app reads it; a rollback cannot be undone from here.
 
 - **Keychain.** Secrets are in a 0600 file in the app's data directory, as in
   idlewild-editor. Keychain (macOS) and the iOS keychain are the better home.

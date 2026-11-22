@@ -67,6 +67,58 @@ textarea {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+/* The draggable edge of a column (resize.ts): a strip just inside the
+   dividing line, which turns accent-coloured while it is held. */
+.col-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 7px;
+  z-index: 6;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.col-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s 0.12s;
+}
+
+.col-resize:hover::after,
+.col-resize.active::after,
+.col-resize:focus-visible::after {
+  background: var(--accent);
+}
+
+.col-resize:focus {
+  outline: none;
+}
+
+#app.resizing {
+  transition: none;
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* A frame under the pointer would take the drag away. */
+#app.resizing iframe {
+  pointer-events: none;
+}
+
+#app.hide-repos .resize-repos,
+#app.hide-files .resize-files {
+  display: none;
 }
 
 .column-head {
@@ -121,7 +173,10 @@ textarea {
   padding-left: max(12px, var(--safe-left));
 }
 
-html.platform-macos .col-repos .column-head {
+/* Whichever column is leftmost leaves room for the traffic lights. */
+html.platform-macos .col-repos .column-head,
+html.platform-macos #app.hide-repos .col-files .column-head,
+html.platform-macos #app.hide-repos.hide-files .editor-bar {
   padding-left: 84px;
 }
 
@@ -277,6 +332,18 @@ html.platform-macos .col-repos .column-head {
 .dot.synced {
   background: var(--added);
   opacity: 0.6;
+}
+
+/* A file's change dot shows its changes on hover (diff-view.ts); the dot is
+   small, so the area that answers is larger. */
+.file-row .dot {
+  position: relative;
+}
+
+.file-row .dot::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
 }
 
 .add-row {
@@ -510,6 +577,7 @@ html.platform-macos .col-repos .column-head {
   display: flex;
   justify-content: space-between;
   gap: 10px;
+  border-top: 1px solid var(--line);
   padding: 6px 14px calc(6px + var(--safe-bottom));
   color: var(--text-3);
   font-size: 11.5px;
@@ -862,6 +930,20 @@ button.link:hover {
   margin-left: auto;
 }
 
+.menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.menu button:disabled:hover {
+  background: transparent;
+  color: var(--text);
+}
+
+.menu button.has-submenu.open:not(:hover) {
+  background: var(--bg-active);
+}
+
 .menu hr {
   border: 0;
   border-top: 1px solid var(--line);
@@ -915,6 +997,130 @@ button.link:hover {
   }
 }
 
+/* ── a file's changes, on hover (diff-view.ts) ── */
+
+.diff-tip {
+  position: fixed;
+  z-index: 70;
+  width: min(460px, calc(100vw - 16px));
+  max-height: min(60vh, 520px);
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: fade-in 0.1s ease;
+}
+
+.diff-tip-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 7px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.diff-tip-head b {
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.diff-tip-head .since {
+  color: var(--text-3);
+}
+
+.diff-tip-head .pd-summary {
+  margin-left: auto;
+}
+
+.diff-tip-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 4px;
+}
+
+/* Word-level changes: deletions struck through in red, insertions on green. */
+.prose-diff {
+  font-family: var(--ui-font);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.prose-diff p {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prose-diff .pd-context {
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+}
+
+.prose-diff .pd-gap {
+  color: var(--text-3);
+  font-size: 11px;
+  margin: 0 0 8px;
+}
+
+.prose-diff del {
+  color: var(--deleted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  background: color-mix(in srgb, var(--deleted) 9%, transparent);
+  border-radius: 2px;
+}
+
+.prose-diff ins {
+  color: var(--text);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--added) 26%, transparent);
+  border-radius: 2px;
+}
+
+.pd-summary,
+.pd-note {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+/* ── night vision (theme.ts) ──
+   Two click-through layers over everything: the first reduces what is
+   under it to its luminance, the second multiplies that by pure red. */
+
+.night-vision-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+#night-vision-grey {
+  z-index: 2147483646;
+  -webkit-backdrop-filter: grayscale(1);
+  backdrop-filter: grayscale(1);
+}
+
+#night-vision-red {
+  z-index: 2147483647;
+  background: #f00;
+  mix-blend-mode: multiply;
+}
+
 /* ── narrow windows ──
    iPad portrait and split view: the repositories column becomes a drawer.
    iPhone: one column at a time, with back buttons. */
@@ -962,6 +1168,14 @@ button.link:hover {
   .only-narrow {
     display: inline-grid !important;
   }
+  /* The drawer is a fixed width; the Files column is leftmost. */
+  .resize-repos {
+    display: none;
+  }
+  html.platform-macos .col-files .column-head,
+  html.platform-macos #app.hide-files .editor-bar {
+    padding-left: 84px;
+  }
 }
 
 @media (max-width: 700px) {
@@ -994,7 +1208,8 @@ button.link:hover {
   .only-phone {
     display: inline-grid !important;
   }
-  .not-phone {
+  .not-phone,
+  .col-resize {
     display: none !important;
   }
   .col-files,

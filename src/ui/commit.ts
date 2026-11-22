@@ -1,11 +1,12 @@
-// The Commit sheet: every changed file, ticked; the diff of whichever one is
-// selected; a message written from the files' titles until somebody types one.
+// The Commit sheet: every changed file, ticked; the changes in whichever one
+// is selected, word by word; a message written from the files' titles until
+// somebody types one.
 
 import { h, icon } from "../lib/dom";
-import { api } from "../lib/ipc";
 import { repoById, store } from "../lib/store";
 import * as actions from "../lib/actions";
 import { openModal, confirmModal } from "./modal";
+import { renderFileChanges } from "./diff-view";
 
 export async function openCommit(repoId: string) {
   const repo = repoById(repoId);
@@ -78,24 +79,11 @@ export async function openCommit(repoId: string) {
   };
 
   async function showDiff() {
-    diff.replaceChildren(h("div", { class: "hunk" }, "…"));
-    try {
-      const text = await api.diff(repoId, selected);
-      const lines = text.split("\n").slice(0, 1500);
-      diff.replaceChildren(
-        ...lines.map((line) =>
-          h(
-            "div",
-            {
-              class: line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : line.startsWith("@@") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("+++") || line.startsWith("---") ? "hunk" : "",
-            },
-            line || " ",
-          ),
-        ),
-      );
-    } catch (e) {
-      diff.replaceChildren(h("div", { class: "hunk" }, (e as Error).message));
-    }
+    const path = selected;
+    const kind = changes.find((c) => c.path === path)?.kind ?? "modified";
+    diff.replaceChildren(h("div", { class: "pd-note" }, "…"));
+    const view = await renderFileChanges(repoId, path, kind);
+    if (selected === path) diff.replaceChildren(view);
   }
 
   const sync = () => {

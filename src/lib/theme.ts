@@ -49,7 +49,34 @@ export function applyAppearance(a: Appearance) {
   root.style.setProperty("--font-size", `${a.fontSize}px`);
   root.style.setProperty("--line-height", String(a.lineHeight));
   root.style.setProperty("--column", `${a.columnWidth}ch`);
+  nightVision(!!a.nightVision);
   if (was !== root.dataset.theme) themeListeners.forEach((fn) => fn(dark));
+}
+
+/**
+ * Night vision, as snorkle draws it: two click-through layers over the whole
+ * window, previews included. The first reduces everything under it to its
+ * luminance; the second multiplies that by pure red, leaving no green or
+ * blue. Filter functions and a blend mode only — WebKit does not accept SVG
+ * filters in `backdrop-filter`. The body's opaque background keeps the red
+ * from painting over anything transparent.
+ */
+function nightVision(on: boolean) {
+  if (typeof document === "undefined" || !document.body) return;
+  const have = document.getElementById("night-vision-grey");
+  if (on && !have) {
+    for (const id of ["night-vision-grey", "night-vision-red"]) {
+      const layer = document.createElement("div");
+      layer.id = id;
+      layer.className = "night-vision-layer";
+      layer.setAttribute("aria-hidden", "true");
+      document.body.appendChild(layer);
+    }
+  } else if (!on && have) {
+    have.remove();
+    document.getElementById("night-vision-red")?.remove();
+  }
+  document.documentElement.classList.toggle("night-vision", on);
 }
 
 media?.addEventListener("change", () => {

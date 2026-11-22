@@ -43,7 +43,6 @@ export function openRepoSettings(repoId: string) {
       h("div", { class: "group-title" }, "Where site URLs live in the repository"),
       assets,
       h("div", { class: "hint", style: "margin:-10px 0 16px" }, "How an image written as /images/blog/a.jpg in a post is found, for inline images and the draft preview. Longest prefix wins."),
-      h("div", { class: "field" }, h("label", null, "Stylesheets for the draft preview"), stylesheetInput()),
     );
   };
 
@@ -67,12 +66,6 @@ export function openRepoSettings(repoId: string) {
 
   function addRow(label: string, add: () => void) {
     return h("div", { class: "opt", style: "min-height:40px" }, h("button", { class: "link", type: "button", onclick: () => (add(), draw()) }, `+ ${label}`));
-  }
-
-  function stylesheetInput() {
-    const input = h("input", { class: "input mono", value: profile.stylesheets.join(", "), placeholder: "styles/main.css, styles/post.css" });
-    input.addEventListener("input", () => (profile.stylesheets = input.value.split(",").map((s) => s.trim()).filter(Boolean)));
-    return input;
   }
 
   async function redetect(useAi: boolean) {

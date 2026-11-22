@@ -15,9 +15,15 @@ src/                         the interface (TypeScript, no framework)
   lib/ipc.ts                 every backend call, typed; mock outside Tauri
   lib/site.ts                image references → repository paths (site profile)
   lib/frontmatter.ts         YAML/TOML frontmatter; new-post naming and template
-  lib/theme.ts               Appearance → CSS custom properties
+  lib/theme.ts               Appearance → CSS custom properties; night vision
   lib/log.ts                 the console's lines and progress bars
+  lib/diff.ts                word-level differences for prose (Myers, paragraphs then words)
+  lib/locate.ts              clicked preview text → offset in the markdown
+  lib/published.ts           does a live page show a post's new version yet?
   ui/                        the three columns, every sheet, the console
+  ui/diff-view.ts            the word-level change view: dot tooltip, Commit and Rollback sheets
+  ui/resize.ts               draggable column edges, remembered per device
+  ui/rollback.ts             the Rollback sheet
   editor/editor.ts           CodeMirror setup
   editor/keymap.ts           the shortcut table (also drives Settings → Shortcuts)
   editor/frontmatter-ext.ts  keeps frontmatter out of the markdown parser; dim/fold;
@@ -77,6 +83,18 @@ stops, on ⌘S, and when the app goes to the background.
 - **Commit** takes exactly the files ticked in the sheet; a missing file is
   committed as a deletion. Author is from Settings, or the GitHub login and its
   no-reply address.
+- **Rollback** is the one operation that discards work, so it is two calls.
+  `repo_rollback_plan` lists what would go: for "local", every uncommitted
+  change (untracked, non-ignored files included) against HEAD; for "remote",
+  the commits `origin/<branch>` lacks plus every change since the merge base,
+  so commits GitHub has and this copy does not are not shown as losses.
+  `repo_rollback` takes the plan's HEAD and target ids and refuses if either
+  has moved, then checks out the target with `remove_untracked` and resets
+  the branch hard. libgit2's hard reset overrides the checkout strategy it is
+  given, hence the separate checkout.
+- **Status** also lists `unpushed`: the files changed between the merge base
+  with `origin/<branch>` and HEAD, which the live preview uses to say whether
+  the open post is on GitHub.
 
 ## Site profiles
 
@@ -121,9 +139,45 @@ run with an opaque origin and cannot reach Tauri's IPC. The draft frame is a
 fixed `srcdoc` skeleton that receives rendered HTML by `postMessage`, so
 inserted HTML never runs scripts and scroll position survives re-rendering.
 
+**Clicking text.** Both frames carry the same small function
+(`LOCATE_JS` in `preview.ts` and `scheme.rs`; a test keeps them identical).
+On a click that is not on a link or control it takes the caret position
+under the pointer (`caretRangeFromPoint`, or `caretPositionFromPoint`), finds
+the enclosing block (paragraph, heading, list item…), and posts the block's
+text before and after the caret and how far through the page the click was.
+`lib/locate.ts` matches words, not characters, since the markdown has syntax
+and link targets the rendered text does not: every occurrence of the clicked
+word is scored by the longest common subsequence of up to six words either
+side within twelve source words, plus a point each when the block's first or
+last word is also the first or last word of that source line. Ties go to the
+occurrence nearest the click's relative position. Below a minimum score
+nothing moves. In the live preview only the open post's own page is searched.
+
+**The live note.** The proxy's `nav` message also carries the page's
+`innerText`. The note under the live page is drawn from git, per file: the
+post has uncommitted changes, or is in `unpushed`, or the branch has no
+upstream. A push records each pushed post as `origin/<branch>` had it before;
+for fifteen minutes after, if the open post was in that push, the page text
+is compared with both versions (`lib/published.ts`: three-word runs of the
+rendered post missing from the page, the version missing fewer wins; rendering
+differences hit both alike). Until the new one wins the note says the site may
+still be rebuilding. It is redrawn on every status change and every page load.
+
 The host-based form is how WebKit hands custom schemes to the app on macOS,
 iOS and Linux. Windows and Android rewrite them to `http://gitidor.localhost`,
 which loses the host — not a target platform, but noted.
+
+## Word-level changes
+
+`lib/diff.ts` runs Myers' O(ND) diff twice: over lines (paragraphs, in
+markdown), then over the word, space and punctuation tokens of each changed
+run of lines. A short unchanged stretch between two changes (a space, a word
+of one or two letters) is folded into them and deletions are put before
+insertions, so a rewritten phrase reads as one change. Each pass gives up past
+a fixed number of edits and shows the run as one deletion and one insertion,
+which bounds memory on a rewritten file. The older text comes from
+`repo_show` (a file as HEAD, `origin/<branch>` or a plan's base has it); the
+newer one is the editor's text for the open file and the disk's otherwise.
 
 ## Frontmatter validation
 

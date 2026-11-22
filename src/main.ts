@@ -1,5 +1,5 @@
-// gitidor: three columns — repositories, files, the editor — and the
-// window-level shortcuts that work wherever focus is.
+// gitidor: three columns — repositories (hidden at launch), files, the
+// editor — and the window-level shortcuts that work wherever focus is.
 
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/400-italic.css";
@@ -31,10 +31,12 @@ import { activeRepo } from "./lib/store";
 import { consolePanel, toggleConsole } from "./ui/console";
 import { listenForLogs } from "./lib/ipc";
 import { log } from "./lib/log";
+import { restoreWidths } from "./ui/resize";
 
 const app = document.getElementById("app")!;
 const scrim = h("div", { class: "drawer-scrim", onclick: () => actions.setLayout({ drawer: false }) });
 app.append(reposColumn(), filesColumn(), editorColumn(), scrim);
+restoreWidths();
 document.body.appendChild(consolePanel());
 void listenForLogs();
 
@@ -107,7 +109,9 @@ actions
   .then(() => {
     document.documentElement.classList.toggle("platform-macos", store.platform === "macos");
     log.info("app", `gitidor ${__APP_VERSION__} on ${store.platform || "a browser"} — ${store.repos.length} repositor${store.repos.length === 1 ? "y" : "ies"}${store.online ? "" : ", offline"}`);
-    if (!store.repos.length) actions.setLayout({ pane: "repos" });
+    // The repositories column starts hidden, except when there is nothing
+    // else to show: "Add Repo" is in it.
+    if (!store.repos.length) actions.setLayout({ pane: "repos", repos: true });
   })
   .catch((e) => {
     log.error("app", `gitidor could not start: ${(e as Error).message}`);

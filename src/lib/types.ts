@@ -10,6 +10,8 @@ export interface Appearance {
   frontmatter: "dim" | "fold" | "show";
   inlineImages: boolean;
   spellcheck: boolean;
+  /** Everything in shades of red, for working in the dark. */
+  nightVision: boolean;
 }
 
 export interface GitSettings {
@@ -125,6 +127,22 @@ export interface RepoStatus {
   behind: number;
   hasUpstream: boolean;
   changes: Change[];
+  /** Files that commits GitHub does not have yet change. */
+  unpushed: string[];
+}
+
+export interface RollbackPlan {
+  /** `local`: the last commit here. `remote`: GitHub's branch as last fetched. */
+  to: "local" | "remote";
+  target: CommitInfo;
+  /** HEAD when the plan was made; the rollback refuses if it has moved. */
+  head: string;
+  /** The commit lost changes are shown against. */
+  base: string;
+  /** Commits that would be lost, newest first. */
+  commits: CommitInfo[];
+  /** Files whose changes would be lost. */
+  files: Change[];
 }
 
 export interface Branches {

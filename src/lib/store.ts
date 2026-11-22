@@ -30,6 +30,7 @@ export const defaultSettings: Settings = {
     frontmatter: "dim",
     inlineImages: true,
     spellcheck: true,
+    nightVision: false,
   },
   git: { authorName: "", authorEmail: "", commitTemplate: "Update {files}", fetchOnOpen: true, pushAfterCommit: true },
   ai: { provider: "none", anthropicModel: "claude-opus-5-5", openaiModel: "" },
@@ -52,8 +53,14 @@ export const store = {
   collapsed: new Set<string>(),
   filter: "",
   openFile: null as OpenFile | null,
-  layout: { repos: true, files: true, drawer: false, pane: "repos" as Pane },
-  preview: { open: false, mode: "draft" as "draft" | "live" },
+  // The repositories column starts hidden; the Files column's sidebar button
+  // and ⌘\ bring it back.
+  layout: { repos: false, files: true, drawer: false, pane: "repos" as Pane },
+  preview: { open: false, mode: "live" as "draft" | "live" },
+  /** What each repository's last push sent, so the live preview can say a
+   *  post is pushed but the site may not have rebuilt yet. `previous` is each
+   *  file as GitHub had it before the push (null: new). */
+  pushed: {} as Record<string, { at: number; previous: Map<string, string | null> } | undefined>,
   console: { open: false },
   online: typeof navigator === "undefined" ? true : navigator.onLine,
 };

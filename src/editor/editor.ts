@@ -80,6 +80,8 @@ export interface EditorHandle {
   replaceText(text: string): void;
   setAppearance(a: EditorAppearance): void;
   focus(): void;
+  /** Put the caret at `pos` and scroll it to the middle of the view. */
+  revealAt(pos: number): void;
 }
 
 export function createEditor(host: HTMLElement, onChange: (text: string) => void, appearance: EditorAppearance): EditorHandle {
@@ -173,6 +175,11 @@ export function createEditor(host: HTMLElement, onChange: (text: string) => void
       view.dispatch({ effects: look.reconfigure(lookExt(a)) });
     },
     focus() {
+      view.focus();
+    },
+    revealAt(pos) {
+      const at = Math.max(0, Math.min(pos, view.state.doc.length));
+      view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }), userEvent: "select" });
       view.focus();
     },
   };

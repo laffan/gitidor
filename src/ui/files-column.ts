@@ -1,6 +1,9 @@
 // Column 2: the folders chosen for the active repository, each with its
 // markdown files under it and a menu (new post, refresh, remove) across from
-// its name. "Add Folder" is always last.
+// its name. "Add Folder" is always last. The head has the button that shows
+// and hides the repositories column, the repository's name, and — when it
+// has changes — the same Commit button as its card. Resting the pointer on
+// a file's change dot shows what changed in it.
 
 import { h, icon, iconButton, replace } from "../lib/dom";
 import { activeRepo, emit, folderKey, on, store } from "../lib/store";
@@ -11,6 +14,17 @@ import { openAddFolder } from "./add-folder";
 import { confirmModal, promptModal } from "./modal";
 import { openExternal } from "../lib/ipc";
 import { publicAddress } from "../lib/site";
+import { openCommit } from "./commit";
+import { changeTooltip } from "./diff-view";
+import { resizeHandle } from "./resize";
+
+const narrow = typeof window !== "undefined" ? window.matchMedia("(max-width: 1080px)") : null;
+
+/** Show or hide the repositories column; where it is a drawer, open the drawer. */
+export function toggleRepos() {
+  if (narrow?.matches) actions.setLayout({ drawer: true });
+  else actions.setLayout({ repos: !store.layout.repos });
+}
 
 export function filesColumn(): HTMLElement {
   const title = h("h2", { "data-tauri-drag-region": "" }, "Files");
@@ -21,6 +35,18 @@ export function filesColumn(): HTMLElement {
     render();
   });
 
+  const badge = h("span", { class: "badge" });
+  const commitBtn = iconButton(
+    "commit",
+    "Commit changes…",
+    () => {
+      const id = store.activeRepoId;
+      if (id) void openCommit(id);
+    },
+    { hidden: true },
+  );
+  commitBtn.append(badge);
+
   const col = h(
     "section",
     { class: "column col-files", "aria-label": "Files" },
@@ -28,16 +54,22 @@ export function filesColumn(): HTMLElement {
       "div",
       { class: "column-head", "data-tauri-drag-region": "" },
       iconButton("back", "Repositories", () => actions.setLayout({ pane: "repos" }), { class: "icon-btn only-phone" }),
-      iconButton("sidebar", "Repositories", () => actions.setLayout({ drawer: true }), { class: "icon-btn only-narrow" }),
+      iconButton("sidebar", "Show or hide the repositories", () => toggleRepos(), { class: "icon-btn not-phone" }),
       title,
+      commitBtn,
     ),
     h("div", { class: "files-filter" }, search),
     body,
+    resizeHandle("files"),
   );
 
   function render() {
     const repo = activeRepo();
     title.textContent = repo ? repo.name : "Files";
+    const changes = repo ? (store.status[repo.id]?.changes.length ?? 0) : 0;
+    commitBtn.hidden = !changes;
+    badge.textContent = String(changes);
+    commitBtn.title = `Commit ${changes} change${changes === 1 ? "" : "s"}… (⇧⌘K)`;
     if (!repo) {
       replace(body, h("div", { class: "empty" }, h("strong", null, "No repository selected"), "Choose one on the left, or add one."));
       return;
@@ -49,7 +81,7 @@ export function filesColumn(): HTMLElement {
       h("button", { class: "add-row", type: "button", onclick: () => void openAddFolder(repo.id) }, icon("plus"), "Add Folder"),
     );
   }
-  on(["repos", "files", "file"], render);
+  on(["repos", "files", "file", "status"], render);
   render();
   return col;
 }
@@ -159,10 +191,16 @@ function fileRow(repo: RepoRecord, folder: string, f: FileEntry): HTMLElement {
       "div",
       { class: "title" },
       h("span", null, f.title || f.name),
-      f.change ? h("span", { class: `dot ${f.change}`, title: f.change }) : null,
+      f.change ? changeDot(repo, f) : null,
     ),
     h("div", { class: "sub" }, sub, f.draft ? " · draft" : ""),
   );
+}
+
+function changeDot(repo: RepoRecord, f: FileEntry): HTMLElement {
+  const dot = h("span", { class: `dot ${f.change}`, "aria-label": `${f.change}: rest the pointer here to see the changes` });
+  changeTooltip(dot, repo.id, f.path, f.change);
+  return dot;
 }
 
 async function discard(repo: RepoRecord, f: FileEntry) {

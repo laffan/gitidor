@@ -25,18 +25,28 @@ without a network. Only pulling and pushing need one.
 
 ## The three columns
 
-**Repositories.** One card per repository: its branch (tap to switch or make
+**Repositories.** Hidden when the app opens (unless there are none yet); the
+sidebar button beside the repository's name at the top of the Files column
+shows and hides it. One card per repository: its branch (tap to switch or make
 one), how many files have changed, how many commits are ahead of or behind
 GitHub, and the last commit. The selected card has Pull, Commit, Push, Open
-site and a menu with the repository's settings, AI site detection, Open on
+site and a menu with the repository's settings, AI site detection, **Roll
+back** (to the last remote commit, or to the last local commit), Open on
 GitHub and Remove. **Add Repo** is always last. **Settings** is the gear in the
-lower-left corner, and beside it the **Console** button.
+lower-left corner; beside it are **Night vision** and the **Console** button.
 
 **Files.** The folders you chose, each listing its markdown files newest
-first, with titles from frontmatter and a dot for anything changed. The ☰
-across from a folder's name has New post, Refresh and Remove. **Add Folder** is
-always last; it lists the clone's folders with their markdown counts and marks
-the ones the site's config says hold posts.
+first, with titles from frontmatter and a dot for anything changed. Rest the
+pointer on a dot to see what changed in that file since the last commit, word
+by word: deletions struck through in red, insertions highlighted in green.
+When the repository has changes, a **Commit** button with their count sits
+across from its name. The ☰ across from a folder's name has New post, Refresh
+and Remove. **Add Folder** is always last; it lists the clone's folders with
+their markdown counts and marks the ones the site's config says hold posts.
+
+Every column's edge can be dragged to change its width, and so can the line
+between the editor and the preview; double-click an edge to put it back.
+Widths are remembered on the device.
 
 **Editor.** CodeMirror 6, set up the way [hush](https://github.com/laffan/hush)
 sets it up for prose, with every hush text-editing shortcut on hush's keys
@@ -51,12 +61,45 @@ Saving is automatic.
 
 The 👁 button opens the **preview** beside the text:
 
+- **Live**, what it opens to, loads the published site through a small proxy.
+  As you click around, it works out which source file each page came from and
+  offers **Edit this post**. It shows what is pushed and built, and says so
+  when the open post has changes that are not pushed yet, or was pushed but
+  the page does not show the new version yet (the site is still rebuilding);
+  the note goes when the page catches up. Without a public address it opens on
+  Draft instead.
 - **Draft** renders the file as typed, offline, with images resolved the same
-  way the editor resolves them, optionally with the site's own stylesheets.
-- **Live** loads the published site through a small proxy. As you click
-  around, it works out which source file each page came from and offers
-  **Edit this post**. It shows what is pushed and built, and says so when the
-  open file has changes that are not on it yet.
+  way the editor resolves them.
+
+Click text in either and the editor moves to the same words, with the caret
+there. The rendered text has no markdown syntax and the source has no
+rendering, so this matches words, not characters: the clicked word and the
+words around it.
+
+## Commit and roll back
+
+The **Commit** sheet lists every changed file, ticked, and shows the selected
+one's changes word by word, the same way as the dots' tooltips: paragraphs
+are single lines in markdown, so a line diff could only say that a paragraph
+changed.
+
+**Roll back** in a repository's menu has two choices:
+
+- **To last local commit** drops every uncommitted change, new files
+  included (ignored files are left alone).
+- **To last remote commit** also drops the commits GitHub does not have,
+  putting the branch where GitHub's was when the app last checked.
+
+Either one first shows what would be lost — the commits, and each file's
+changes word by word — and asks. It refuses if anything moved in between.
+
+## Night vision
+
+The eye beside Settings (and Settings → Appearance) draws the whole window,
+previews included, in shades of red with no blue or green light, as
+[snorkle](https://github.com/laffan/snorkle) does: one layer reduces what is
+under it to grey, a second multiplies that by pure red. It pairs best with
+the Dark appearance.
 
 ## Console
 
@@ -144,7 +187,8 @@ posts.
 ## Shortcuts
 
 All of hush's text-editing shortcuts, plus: ⌘S save now, ⇧⌘P preview,
-⌘\ hide the side columns, ⇧⌘K commit, ⌘N new post, ⇧⌘Y console,
+⌘\ hide the side columns (and bring back the ones that were showing),
+⇧⌘K commit, ⌘N new post, ⇧⌘Y console,
 ⌘, settings. The full
 list is in Settings → Shortcuts.
 
@@ -155,15 +199,23 @@ Developed on Linux. Verified there:
 - **Rust tests** — git against local bare repositories (clone, commit chosen
   files, push, fast-forward and merging pulls, refusing a conflicting merge
   without touching anything, never overwriting an uncommitted edit, branches,
-  discard, diff), site detection, URL patterns, path guards, the preview
+  discard, diff, a file as a commit has it, the files unpushed commits change,
+  rolling back to the last local or remote commit and refusing a stale plan), site detection, URL patterns, path guards, the preview
   scheme. Network tests (`--ignored`): a real HTTPS clone and fetch through
   libgit2, GitHub's API for a real repository (including finding a custom
   domain from `CNAME`), and the live-preview proxy against the real blog.
 - **Frontend tests** — asset resolution, frontmatter in both formats and its
-  line-by-line validation, new-post naming and templates.
+  line-by-line validation, new-post naming and templates; the word-level diff,
+  finding clicked preview text in the markdown, telling whether a live page
+  shows a post's new version, and that the click script is the same in the
+  draft preview and in live pages.
 - **In Chromium against the mock** — every column and sheet at desktop, iPad
   and iPhone widths, light and dark; hush's shortcuts acting on text; autosave,
-  the commit sheet and new posts.
+  the commit sheet and new posts; the change tooltip, the Roll back submenu and
+  sheet, dragging column edges, night vision over the preview, clicking draft
+  preview text to move the editor, and the live preview's note through an
+  edit, a push, and the page catching up (with a stand-in page that reports
+  its text as the proxy's script does).
 - **The Tauri app itself, built and run on Linux (WebKitGTK)** with a copy of
   the blog: the folder listing, opening posts, inline images through
   `gitidor://local`, the draft preview, the live preview through the proxy,
@@ -186,6 +238,8 @@ See [docs/architecture.md](docs/architecture.md).
   [hush](https://github.com/laffan/hush) (`src/editor/hush/`).
 - GitHub and libgit2 approach, error wording, and the iOS build patches:
   adapted from [idlewild-editor](https://github.com/laffan/idlewild-editor).
+- Night vision: [snorkle](https://github.com/laffan/snorkle)'s icon and its
+  two-layer way of drawing it.
 - The preview is not [snorkle](https://github.com/laffan/snorkle): snorkle
   hosts its own WKWebViews from Rust, which is far more browser than a
   preview needs and would mean an unverified objc2 layer here. The live

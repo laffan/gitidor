@@ -398,6 +398,28 @@ async fn repo_log(id: String, limit: usize) -> Res<Vec<gitops::CommitInfo>> {
     with_repo(id, move |_, repo| gitops::log(repo, limit.clamp(1, 200))).await
 }
 
+/// One file as a commit has it, or `null` when that commit does not.
+#[tauri::command]
+async fn repo_show(id: String, rev: String, path: String) -> Res<Option<String>> {
+    with_repo(id, move |_, repo| gitops::show(repo, &rev, &path)).await
+}
+
+#[tauri::command]
+async fn repo_rollback_plan(id: String, to: String) -> Res<gitops::RollbackPlan> {
+    with_repo(id, move |_, repo| gitops::rollback_plan(repo, &to)).await
+}
+
+/// Roll back as the plan the person saw said; `head` and `target` are the
+/// plan's, and a mismatch refuses rather than losing something unseen.
+#[tauri::command]
+async fn repo_rollback(id: String, to: String, head: String, target: String) -> Res<gitops::RepoStatus> {
+    with_repo(id, move |_, repo| {
+        gitops::rollback(repo, &to, &head, &target)?;
+        gitops::status(repo)
+    })
+    .await
+}
+
 // ── folders and files ───────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -588,6 +610,9 @@ pub fn run() {
             repo_discard,
             repo_diff,
             repo_log,
+            repo_show,
+            repo_rollback_plan,
+            repo_rollback,
             list_dirs,
             set_folders,
             list_folder,

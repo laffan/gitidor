@@ -12,6 +12,7 @@ import type {
   KeyTest,
   PullReport,
   RepoCheck,
+  RollbackPlan,
   RepoRecord,
   RepoStatus,
   RepoSummary,
@@ -40,7 +41,7 @@ function load() {
 }
 
 // Calls made often enough that timing each one would bury everything else.
-const QUIET = new Set(["repo_status", "secret_status", "get_settings", "platform", "site_lookup"]);
+const QUIET = new Set(["repo_status", "secret_status", "get_settings", "platform", "site_lookup", "repo_show"]);
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const b = await load();
@@ -99,6 +100,10 @@ export const api = {
   discard: (id: string, path: string) => call<RepoStatus>("repo_discard", { id, path }),
   diff: (id: string, path: string) => call<string>("repo_diff", { id, path }),
   log: (id: string, limit: number) => call<CommitInfo[]>("repo_log", { id, limit }),
+  /** A file as a commit (`HEAD`, `origin/main`, an id) has it; null if it does not. */
+  show: (id: string, rev: string, path: string) => call<string | null>("repo_show", { id, rev, path }),
+  rollbackPlan: (id: string, to: "local" | "remote") => call<RollbackPlan>("repo_rollback_plan", { id, to }),
+  rollback: (id: string, plan: RollbackPlan) => call<RepoStatus>("repo_rollback", { id, to: plan.to, head: plan.head, target: plan.target.id }),
 
   listDirs: (id: string) => call<DirInfo[]>("list_dirs", { id }),
   setFolders: (id: string, folders: string[]) => call<RepoRecord>("set_folders", { id, folders }),

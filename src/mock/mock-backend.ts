@@ -140,6 +140,11 @@ const files: Record<string, Record<string, string>> = {
   },
 };
 const heads: Record<string, Record<string, string>> = { blog01: head, notes02: { ...files.notes02 } };
+/** What GitHub has, as of the last fetch: notes02 is a commit ahead. */
+const origins: Record<string, Record<string, string>> = {
+  blog01: { ...head },
+  notes02: { ...files.notes02, "content/notes/compost.md": "+++\ntitle = 'Compost'\ndate = 2026-10-01\n+++\n\nTurn it every week.\n" },
+};
 const meta: Record<string, { branch: string; ahead: number; behind: number; branches: string[]; remote: string[]; log: { summary: string; time: number }[] }> = {
   blog01: { branch: "main", ahead: 0, behind: 2, branches: ["main"], remote: ["drafts"], log: [{ summary: "Add Lisboa", time: Date.now() - 86400000 * 2 }] },
   notes02: { branch: "main", ahead: 1, behind: 0, branches: ["main", "spring"], remote: [], log: [{ summary: "Tomato notes", time: Date.now() - 86400000 * 3 }] },
@@ -182,16 +187,44 @@ function changes(id: string): Change[] {
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function differing(a: Record<string, string>, b: Record<string, string>, added: "added" | "deleted" = "added"): Change[] {
+  const out: Change[] = [];
+  for (const p of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (!(p in b)) out.push({ path: p, kind: added });
+    else if (!(p in a)) out.push({ path: p, kind: added === "added" ? "deleted" : "added" });
+    else if (a[p] !== b[p]) out.push({ path: p, kind: "modified" });
+  }
+  return out.sort((x, y) => x.path.localeCompare(y.path));
+}
+
+const commitInfo = (id: string, i: number) => {
+  const l = meta[id].log[i];
+  return { id: `c${i}${id}`, short: `${(0xa1b2c3d + i * 977).toString(16).slice(0, 7)}`, summary: l?.summary ?? "", author: "laffan", time: l?.time ?? 0 };
+};
+
 function status(id: string) {
   const m = meta[id];
-  const last = m.log[0];
   return {
     branch: m.branch,
-    head: last ? { id: "a1b2c3d4e5", short: "a1b2c3d", summary: last.summary, author: "laffan", time: last.time } : null,
+    head: m.log[0] ? commitInfo(id, 0) : null,
     ahead: m.ahead,
     behind: m.behind,
     hasUpstream: true,
     changes: changes(id),
+    unpushed: m.ahead ? differing(heads[id], origins[id]).map((c) => c.path) : [],
+  };
+}
+
+function rollbackPlan(id: string, to: string) {
+  const m = meta[id];
+  if (to === "local") return { to, target: commitInfo(id, 0), head: commitInfo(id, 0).id, base: "HEAD", commits: [], files: changes(id) };
+  return {
+    to,
+    target: commitInfo(id, m.ahead),
+    head: commitInfo(id, 0).id,
+    base: "ORIGIN",
+    commits: m.log.slice(0, m.ahead).map((_, i) => commitInfo(id, i)),
+    files: differing(files[id], origins[id]),
   };
 }
 
@@ -322,6 +355,7 @@ const handlers: Record<string, Handler> = {
     say("debug", "git", "remote: Resolving deltas: 100% (3/3), completed with 3 local objects.", id);
     say("debug", "git", `GitHub accepted refs/heads/${meta[id].branch}`, id);
     meta[id].ahead = 0;
+    origins[id] = { ...heads[id] };
     say("info", "git", `Pushed a1b2c3d..4f2e9a1 to ${meta[id].branch}`, id);
     return status(id);
   },
@@ -360,6 +394,27 @@ const handlers: Record<string, Handler> = {
       }
     }
     return out.join("\n");
+  },
+  repo_show: (a) => {
+    const id = String(a.id);
+    const rev = String(a.rev);
+    const tree = rev === "HEAD" ? heads[id] : rev.startsWith("origin/") || rev === "ORIGIN" ? origins[id] : heads[id];
+    return tree?.[String(a.path)] ?? null;
+  },
+  repo_rollback_plan: (a) => rollbackPlan(String(a.id), String(a.to)),
+  repo_rollback: async (a) => {
+    const id = String(a.id);
+    const plan = rollbackPlan(id, String(a.to));
+    if (plan.head !== a.head || plan.target.id !== a.target) throw "Something changed since the list was made. Look at it again before rolling back.";
+    await delay(200);
+    if (a.to === "remote") {
+      meta[id].log.splice(0, meta[id].ahead);
+      meta[id].ahead = 0;
+      heads[id] = { ...origins[id] };
+    }
+    files[id] = { ...heads[id] };
+    say("info", "git", `Rolled ${meta[id].branch} back to ${plan.target.short} “${plan.target.summary}”`, id);
+    return status(id);
   },
   repo_log: (a) => meta[String(a.id)].log.map((l, i) => ({ id: `${i}`, short: `abc${i}`, summary: l.summary, author: "laffan", time: l.time })),
   list_dirs: (a) => {
