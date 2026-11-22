@@ -511,6 +511,162 @@ html.platform-macos #app.hide-repos.hide-files .editor-bar {
   font-style: italic;
 }
 
+/* ── upload folders (upload-folder.ts) ── */
+
+.upload-folder .folder-head .icon-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.upload-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 4px;
+  padding: 2px 2px 4px;
+}
+
+.upload-tile,
+.upload-row {
+  position: relative;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  color: inherit;
+}
+
+.upload-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+}
+
+.upload-tile:hover,
+.upload-row:hover {
+  background: var(--bg-hover);
+}
+
+.upload-tile .thumb {
+  aspect-ratio: 1;
+  width: 100%;
+}
+
+.upload-folder .thumb {
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-sunken);
+  color: var(--text-3);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.upload-folder .thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  -webkit-touch-callout: none;
+}
+
+.upload-folder .thumb .doc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.upload-folder .thumb .ext {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.upload-tile .name {
+  font-size: 11px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-tile .dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  box-shadow: 0 0 0 2px var(--card);
+}
+
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 5px 8px 5px 6px;
+}
+
+.upload-row .thumb {
+  width: 34px;
+  height: 34px;
+  flex: none;
+}
+
+.upload-row .thumb .ext {
+  display: none;
+}
+
+.upload-row .text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.upload-row .name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-row .sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 8px 6px;
+  font-size: 11.5px;
+  color: var(--accent-text);
+}
+
+.upload-folder .show-all {
+  display: block;
+  margin: 4px auto 2px;
+  font-size: 12px;
+}
+
+.folder.drop-target {
+  border-radius: var(--radius);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: var(--accent-soft);
+}
+
+.folder.drop-target .folder-head {
+  background: transparent;
+}
+
 .empty {
   color: var(--text-3);
   padding: 18px 10px;

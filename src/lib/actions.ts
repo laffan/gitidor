@@ -46,9 +46,11 @@ export async function refreshStatus(id: string): Promise<RepoStatus | undefined>
 function applyStatus(id: string, status: RepoStatus) {
   store.status[id] = status;
   const kinds = new Map(status.changes.map((c) => [c.path, c.kind]));
-  for (const [key, list] of Object.entries(store.files)) {
-    if (!key.startsWith(`${id}:`) || !list) continue;
-    for (const f of list) f.change = kinds.get(f.path) ?? "";
+  for (const listings of [store.files, store.uploads]) {
+    for (const [key, list] of Object.entries(listings)) {
+      if (!key.startsWith(`${id}:`) || !list) continue;
+      for (const f of list) f.change = kinds.get(f.path) ?? "";
+    }
   }
   emit("status", "files");
 }
@@ -74,7 +76,17 @@ export async function selectRepo(id: string, opts: { showFiles?: boolean } = {})
 export async function loadFolders(repoId: string) {
   const repo = repoById(repoId);
   if (!repo) return;
-  await Promise.all(repo.folders.map((f) => loadFolder(repoId, f)));
+  await Promise.all([...repo.folders.map((f) => loadFolder(repoId, f)), ...(repo.uploadFolders ?? []).map((f) => loadUploads(repoId, f))]);
+}
+
+export async function loadUploads(repoId: string, folder: string) {
+  try {
+    store.uploads[folderKey(repoId, folder)] = await api.listUploads(repoId, folder);
+  } catch (e) {
+    store.uploads[folderKey(repoId, folder)] = [];
+    toast((e as Error).message, "error");
+  }
+  emit("files");
 }
 
 export async function loadFolder(repoId: string, folder: string) {
@@ -103,6 +115,75 @@ export async function removeFolder(repoId: string, folder: string) {
     repoId,
     repo.folders.filter((f) => f !== folder),
   );
+}
+
+export async function setUploadFolders(repoId: string, folders: string[]) {
+  const updated = await api.setUploadFolders(repoId, folders);
+  log.info("files", folders.length ? `Upload folders: ${updated.uploadFolders.join(", ")}` : "No upload folders", repoId);
+  store.repos = store.repos.map((r) => (r.id === repoId ? updated : r));
+  emit("repos");
+  await loadFolders(repoId);
+}
+
+export async function removeUploadFolder(repoId: string, folder: string) {
+  const repo = repoById(repoId);
+  if (!repo) return;
+  delete store.uploads[folderKey(repoId, folder)];
+  await setUploadFolders(
+    repoId,
+    repo.uploadFolders.filter((f) => f !== folder),
+  );
+}
+
+/** A file's bytes as base64, for `import_asset`. */
+export function readBase64(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+/** GitHub refuses a push with a file over 100 MB in it. */
+const MAX_UPLOAD = 100 * 1024 * 1024;
+
+/**
+ * Copy files into an upload folder, one at a time. A name already there gets
+ * a number added rather than replacing the file. They are new files in the
+ * repository: committing and pushing puts them on the site.
+ */
+export async function uploadFiles(repoId: string, folder: string, files: File[]) {
+  const key = folderKey(repoId, folder);
+  if (!files.length || store.uploading[key]) return;
+  const tooBig = files.filter((f) => f.size > MAX_UPLOAD);
+  const sending = files.filter((f) => f.size <= MAX_UPLOAD);
+  if (tooBig.length) toast(`${tooBig.map((f) => f.name).join(", ")} ${tooBig.length === 1 ? "is" : "are"} over 100 MB, which GitHub refuses, so ${tooBig.length === 1 ? "it was" : "they were"} left out.`, "error", 9000);
+  const saved: string[] = [];
+  try {
+    for (const [i, file] of sending.entries()) {
+      store.uploading[key] = `Uploading ${sending.length > 1 ? `${i + 1} of ${sending.length}` : file.name}…`;
+      emit("files");
+      try {
+        const path = await api.importAsset(repoId, folder, file.name, await readBase64(file));
+        saved.push(path);
+        log.info("files", `Uploaded ${path} (${size(file.size)})`, repoId);
+      } catch (e) {
+        toast(`${file.name}: ${(e as Error).message}`, "error");
+      }
+    }
+  } finally {
+    store.uploading[key] = undefined;
+  }
+  await loadUploads(repoId, folder);
+  await refreshStatus(repoId);
+  if (saved.length) toast(`Uploaded ${saved.length === 1 ? (saved[0].split("/").pop() ?? saved[0]) : `${saved.length} files`} to ${folder}. Commit and push to put ${saved.length === 1 ? "it" : "them"} on the site.`);
+}
+
+export function size(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
 // ── the open file ───────────────────────────────────────────────────────────
@@ -341,7 +422,7 @@ export async function createPost(repoId: string, folder: string, title: string) 
   }
 }
 
-export async function deleteFile(repoId: string, path: string, folder: string) {
+export async function deleteFile(repoId: string, path: string, folder: string, kind: "content" | "upload" = "content") {
   if (store.openFile?.path === path && store.openFile.repoId === repoId) {
     store.openFile = null;
     emit("file", "save");
@@ -349,7 +430,7 @@ export async function deleteFile(repoId: string, path: string, folder: string) {
   try {
     await api.deleteFile(repoId, path);
     log.info("files", `Deleted ${path}`, repoId);
-    await loadFolder(repoId, folder);
+    await (kind === "upload" ? loadUploads(repoId, folder) : loadFolder(repoId, folder));
     await refreshStatus(repoId);
   } catch (e) {
     toast((e as Error).message, "error");

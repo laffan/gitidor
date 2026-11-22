@@ -22,6 +22,22 @@ pub struct DirInfo {
     pub markdown: usize,
     /// Markdown files anywhere below.
     pub markdown_total: usize,
+    /// Files of any kind directly inside (not hidden ones), for upload folders.
+    pub files: usize,
+    /// Files of any kind anywhere below.
+    pub files_total: usize,
+}
+
+/// One file in an upload folder.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadEntry {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub modified: i64,
+    /// `modified`, `added`, … from git, else empty.
+    pub change: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,36 +67,116 @@ pub fn list_dirs(root: &Path) -> Vec<DirInfo> {
     out
 }
 
-fn collect_dirs(root: &Path, dir: &Path, depth: usize, out: &mut Vec<DirInfo>) -> usize {
+/// Markdown files and files of any kind below `dir`, for its parent's totals.
+fn collect_dirs(root: &Path, dir: &Path, depth: usize, out: &mut Vec<DirInfo>) -> (usize, usize) {
     if out.len() >= MAX_DIRS || depth > 6 {
-        return 0;
+        return (0, 0);
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(dir) else { return (0, 0) };
     let mut direct = 0;
+    let mut direct_files = 0;
     let mut subdirs = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         let path = entry.path();
+        if name.starts_with('.') {
+            continue;
+        }
         if path.is_dir() {
-            if !name.starts_with('.') && !SKIP.contains(&name.as_str()) {
+            if !SKIP.contains(&name.as_str()) {
                 subdirs.push(path);
             }
-        } else if site::is_markdown(&name) {
-            direct += 1;
+        } else {
+            direct_files += 1;
+            if site::is_markdown(&name) {
+                direct += 1;
+            }
         }
     }
     let index = out.len();
     if dir != root {
-        out.push(DirInfo { path: rel_string(root, dir), depth, markdown: direct, markdown_total: 0 });
+        out.push(DirInfo { path: rel_string(root, dir), depth, markdown: direct, markdown_total: 0, files: direct_files, files_total: 0 });
     }
-    let mut total = direct;
+    let (mut total, mut total_files) = (direct, direct_files);
     for sub in subdirs {
-        total += collect_dirs(root, &sub, depth + 1, out);
+        let (md, all) = collect_dirs(root, &sub, depth + 1, out);
+        total += md;
+        total_files += all;
     }
     if dir != root {
         out[index].markdown_total = total;
+        out[index].files_total = total_files;
     }
-    total
+    (total, total_files)
+}
+
+/// The folders in `folders` that exist in the clone, each once, in the
+/// repository-relative form the rest of the app uses.
+pub fn existing_folders(root: &Path, folders: &[String]) -> Result<Vec<String>, String> {
+    let mut clean = Vec::new();
+    for f in folders {
+        let rel = safe_relative(f)?;
+        let s = rel_string(root, &root.join(&rel));
+        if !s.is_empty() && root.join(&rel).is_dir() && !clean.contains(&s) {
+            clean.push(s);
+        }
+    }
+    Ok(clean)
+}
+
+const MAX_UPLOADS: usize = 5000;
+
+/// Every file under an upload folder (not hidden ones, not dependency
+/// folders), newest first, then by name.
+pub fn list_uploads(root: &Path, folder: &str, changes: &HashMap<String, String>) -> Result<Vec<UploadEntry>, String> {
+    let base = root.join(safe_relative(folder)?);
+    if !base.is_dir() {
+        return Err(format!("{folder} is not in this repository any more"));
+    }
+    let mut paths = Vec::new();
+    collect_files(&base, 0, &mut paths);
+    let mut out: Vec<UploadEntry> = paths
+        .into_iter()
+        .map(|(path, meta)| {
+            let rel = rel_string(root, &path);
+            UploadEntry {
+                name: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                size: meta.len(),
+                modified: meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0),
+                change: changes.get(&rel).cloned().unwrap_or_default(),
+                path: rel,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.path.cmp(&b.path)));
+    Ok(out)
+}
+
+fn collect_files(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, std::fs::Metadata)>) {
+    if depth > 6 || out.len() >= MAX_UPLOADS {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            if !SKIP.contains(&name.as_str()) {
+                collect_files(&path, depth + 1, out);
+            }
+        } else if out.len() < MAX_UPLOADS {
+            out.push((path, meta));
+        }
+    }
 }
 
 /// The markdown files under a folder, newest first.
@@ -219,9 +315,10 @@ pub fn delete(root: &Path, rel: &str) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| format!("Cannot delete {rel}: {e}"))
 }
 
-/// Save image bytes (pasted or dropped into the editor) into the repository.
-/// Answers the repository path it was saved at, with a number added to the
-/// name if something is already there.
+/// Save a file's bytes (an image pasted or dropped into the editor, or a file
+/// uploaded to an upload folder) into the repository. Answers the repository
+/// path it was saved at, with a number added to the name if something is
+/// already there: an upload never overwrites a file.
 pub fn import_asset(root: &Path, dir: &str, name: &str, bytes: &[u8]) -> Result<String, String> {
     let clean: String = name
         .trim()
@@ -230,7 +327,7 @@ pub fn import_asset(root: &Path, dir: &str, name: &str, bytes: &[u8]) -> Result<
         .collect();
     let clean = clean.trim_matches(['-', '.']).to_string();
     if clean.is_empty() {
-        return Err("The image has no usable name".into());
+        return Err(format!("“{name}” has no usable file name"));
     }
     let dir_rel = safe_relative(dir)?;
     let (stem, ext) = clean.rsplit_once('.').map(|(s, e)| (s.to_string(), format!(".{e}"))).unwrap_or((clean.clone(), String::new()));
@@ -245,7 +342,7 @@ pub fn import_asset(root: &Path, dir: &str, name: &str, bytes: &[u8]) -> Result<
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&path, bytes).map_err(|e| format!("Cannot save the image: {e}"))?;
+    std::fs::write(&path, bytes).map_err(|e| format!("Cannot save {candidate}: {e}"))?;
     Ok(rel)
 }
 
@@ -283,7 +380,40 @@ mod tests {
         let dirs = list_dirs(&root);
         let posts = dirs.iter().find(|d| d.path == "posts").unwrap();
         assert_eq!((posts.markdown, posts.markdown_total), (2, 3));
+        assert_eq!((posts.files, posts.files_total), (2, 3));
         assert!(!dirs.iter().any(|d| d.path.starts_with("node_modules")));
+    }
+
+    #[test]
+    fn an_upload_folder_lists_every_file_newest_first() {
+        let root = repo();
+        fs::create_dir_all(root.join("public/img/2024")).unwrap();
+        fs::write(root.join("public/img/b.jpg"), b"bb").unwrap();
+        fs::write(root.join("public/img/a.png"), b"a").unwrap();
+        fs::write(root.join("public/img/2024/c.pdf"), b"ccc").unwrap();
+        fs::write(root.join("public/img/.DS_Store"), b"x").unwrap();
+        let mut changes = HashMap::new();
+        changes.insert("public/img/b.jpg".to_string(), "added".to_string());
+        let list = list_uploads(&root, "public/img", &changes).unwrap();
+        let mut paths: Vec<&str> = list.iter().map(|f| f.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, vec!["public/img/2024/c.pdf", "public/img/a.png", "public/img/b.jpg"]);
+        let b = list.iter().find(|f| f.name == "b.jpg").unwrap();
+        assert_eq!((b.size, b.change.as_str()), (2, "added"));
+        assert!(list.windows(2).all(|w| w[0].modified >= w[1].modified));
+        assert!(list_uploads(&root, "../outside", &changes).is_err());
+
+        let dirs = list_dirs(&root);
+        let img = dirs.iter().find(|d| d.path == "public/img").unwrap();
+        assert_eq!((img.files, img.files_total, img.markdown_total), (2, 3, 0));
+    }
+
+    #[test]
+    fn folders_are_kept_only_if_they_exist_once() {
+        let root = repo();
+        let kept = existing_folders(&root, &["posts".into(), "/posts/".into(), "missing".into(), "posts/2020".into()]).unwrap();
+        assert_eq!(kept, vec!["posts".to_string(), "posts/2020".to_string()]);
+        assert!(existing_folders(&root, &["../x".into()]).is_err());
     }
 
     #[test]

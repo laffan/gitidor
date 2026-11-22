@@ -2,7 +2,7 @@
 // of it changes. Columns subscribe to the topics they draw; actions change
 // the store and announce which topics moved.
 
-import type { FileEntry, RepoRecord, RepoStatus, SecretStatus, Settings } from "./types";
+import type { FileEntry, RepoRecord, RepoStatus, SecretStatus, Settings, UploadEntry } from "./types";
 
 export type Topic = "repos" | "status" | "files" | "file" | "settings" | "secrets" | "layout" | "preview" | "save" | "log" | "console";
 
@@ -50,6 +50,10 @@ export const store = {
   activeRepoId: null as string | null,
   /** Folder listings, keyed `${repoId}:${folder}`. */
   files: {} as Record<string, FileEntry[] | undefined>,
+  /** Upload folder listings, keyed the same way. */
+  uploads: {} as Record<string, UploadEntry[] | undefined>,
+  /** Uploads in progress, by folder key: "2 of 5". */
+  uploading: {} as Record<string, string | undefined>,
   collapsed: new Set<string>(),
   filter: "",
   openFile: null as OpenFile | null,

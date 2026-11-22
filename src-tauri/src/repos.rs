@@ -20,6 +20,9 @@ pub struct RepoRecord {
     pub public_url: String,
     /// The folders shown in the Files column, repository-relative.
     pub folders: Vec<String>,
+    /// Folders shown in the Files column with thumbnails, that files can be
+    /// uploaded into (images, PDFs, anything). Never also in `folders`.
+    pub upload_folders: Vec<String>,
     pub site: Option<SiteProfile>,
     pub added_at: i64,
     /// When `origin` was last fetched; 0 for never.

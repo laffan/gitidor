@@ -1,6 +1,7 @@
 // Column 2: the folders chosen for the active repository, each with its
 // markdown files under it and a menu (new post, refresh, remove) across from
-// its name. "Add Folder" is always last. The head has the button that shows
+// its name; then the upload folders, as thumbnails (upload-folder.ts).
+// "Add Folder" is always last. The head has the button that shows
 // and hides the repositories column, the repository's name, and — when it
 // has changes — the same Commit button as its card. Resting the pointer on
 // a file's change dot shows what changed in it.
@@ -17,6 +18,7 @@ import { publicAddress } from "../lib/site";
 import { openCommit } from "./commit";
 import { changeTooltip } from "./diff-view";
 import { resizeHandle } from "./resize";
+import { uploadSection } from "./upload-folder";
 
 const narrow = typeof window !== "undefined" ? window.matchMedia("(max-width: 1080px)") : null;
 
@@ -74,10 +76,12 @@ export function filesColumn(): HTMLElement {
       replace(body, h("div", { class: "empty" }, h("strong", null, "No repository selected"), "Choose one on the left, or add one."));
       return;
     }
+    const uploads = repo.uploadFolders ?? [];
     replace(
       body,
       repo.folders.map((f) => folderSection(repo, f)),
-      repo.folders.length === 0 ? h("div", { class: "empty" }, h("strong", null, "No folders yet"), "Add the folder your posts live in.") : null,
+      uploads.map((f) => uploadSection(repo, f)),
+      repo.folders.length + uploads.length === 0 ? h("div", { class: "empty" }, h("strong", null, "No folders yet"), "Add the folder your posts live in.") : null,
       h("button", { class: "add-row", type: "button", onclick: () => void openAddFolder(repo.id) }, icon("plus"), "Add Folder"),
     );
   }

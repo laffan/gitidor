@@ -241,6 +241,7 @@ async fn add_repo(app: AppHandle, request_id: String, address: String, public_ur
             remote_url: addr.clone_url(),
             public_url,
             folders: Vec::new(),
+            upload_folders: Vec::new(),
             site: Some(profile),
             added_at: now,
             last_fetched: now,
@@ -430,18 +431,32 @@ async fn list_dirs(id: String) -> Res<Vec<files::DirInfo>> {
 #[tauri::command]
 async fn set_folders(id: String, folders: Vec<String>) -> Res<RepoRecord> {
     blocking(move || {
-        let root = store::clone_dir(&id)?;
-        let mut clean = Vec::new();
-        for f in folders {
-            let rel = store::safe_relative(&f)?;
-            let s = store::rel_string(&root, &root.join(&rel));
-            if root.join(&rel).is_dir() && !clean.contains(&s) {
-                clean.push(s);
-            }
-        }
-        repos::update(&id, |r| r.folders = clean)
+        let clean = files::existing_folders(&store::clone_dir(&id)?, &folders)?;
+        // A folder is one kind or the other: becoming a content folder takes
+        // it out of the upload folders.
+        repos::update(&id, |r| {
+            r.upload_folders.retain(|f| !clean.contains(f));
+            r.folders = clean;
+        })
     })
     .await
+}
+
+#[tauri::command]
+async fn set_upload_folders(id: String, folders: Vec<String>) -> Res<RepoRecord> {
+    blocking(move || {
+        let clean = files::existing_folders(&store::clone_dir(&id)?, &folders)?;
+        repos::update(&id, |r| {
+            r.folders.retain(|f| !clean.contains(f));
+            r.upload_folders = clean;
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_uploads(id: String, folder: String) -> Res<Vec<files::UploadEntry>> {
+    blocking(move || files::list_uploads(&store::clone_dir(&id)?, &folder, &change_map(&id))).await
 }
 
 fn change_map(id: &str) -> HashMap<String, String> {
@@ -485,12 +500,13 @@ async fn delete_file(id: String, path: String) -> Res<()> {
     blocking(move || files::delete(&store::clone_dir(&id)?, &path)).await
 }
 
-/// Save a pasted or dropped image into the repository. Base64 rather than a
-/// JSON array of numbers, which is several times larger for the same bytes.
+/// Save a pasted or dropped image, or an uploaded file, into the repository.
+/// Base64 rather than a JSON array of numbers, which is several times larger
+/// for the same bytes.
 #[tauri::command]
 async fn import_asset(id: String, dir: String, name: String, data: String) -> Res<String> {
     blocking(move || {
-        let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|e| format!("The image could not be read: {e}"))?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|e| format!("{name} could not be read: {e}"))?;
         files::import_asset(&store::clone_dir(&id)?, &dir, &name, &bytes)
     })
     .await
@@ -615,6 +631,8 @@ pub fn run() {
             repo_rollback,
             list_dirs,
             set_folders,
+            set_upload_folders,
+            list_uploads,
             list_folder,
             read_file,
             write_file,

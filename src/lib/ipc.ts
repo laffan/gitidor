@@ -19,6 +19,7 @@ import type {
   SecretStatus,
   Settings,
   SiteProfile,
+  UploadEntry,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -107,6 +108,8 @@ export const api = {
 
   listDirs: (id: string) => call<DirInfo[]>("list_dirs", { id }),
   setFolders: (id: string, folders: string[]) => call<RepoRecord>("set_folders", { id, folders }),
+  setUploadFolders: (id: string, folders: string[]) => call<RepoRecord>("set_upload_folders", { id, folders }),
+  listUploads: (id: string, folder: string) => call<UploadEntry[]>("list_uploads", { id, folder }),
   listFolder: (id: string, folder: string) => call<FileEntry[]>("list_folder", { id, folder }),
   readFile: (id: string, path: string) => call<string>("read_file", { id, path }),
   writeFile: (id: string, path: string, content: string) => call<void>("write_file", { id, path, content }),

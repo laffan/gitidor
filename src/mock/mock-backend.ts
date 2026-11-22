@@ -100,6 +100,16 @@ Notes, essays and the occasional photograph.
 `,
 };
 
+// The pictures the posts use, as the repository has them. Stand-in bytes;
+// `placeholder` draws them.
+for (const name of ["marettimo-harbour.jpg", "lisboa-tram.jpg", "lisboa-tiles.jpg", "crickets-1.jpg", "crickets-2.jpg", "crickets-3.jpg", "my-tribe.jpg", "reading-list.pdf"]) {
+  posts[`public/blog-images/${name}`] = `binary:${name.length * 9173}`;
+}
+/** When each uploaded file arrived, so the newest list first. */
+const uploadedAt: Record<string, number> = {};
+const cloneTime = Date.now() - 86400000 * 12;
+const isMarkdown = (p: string) => /\.(md|markdown)$/i.test(p);
+
 const head: Record<string, string> = { ...posts };
 // One edit already in progress, so the card and the files show a change.
 posts["posts/2026-11-02--marettimo.md"] = posts["posts/2026-11-02--marettimo.md"].replace("bench at the top", "worn bench at the top");
@@ -112,6 +122,7 @@ const blog: RepoRecord = {
   remoteUrl: "https://github.com/laffan/blog.natelaffan.com.git",
   publicUrl: "https://blog.natelaffan.com/",
   folders: ["posts"],
+  uploadFolders: [],
   site: profile,
   addedAt: Date.now() - 86400000 * 12,
   lastFetched: Date.now() - 60000 * 14,
@@ -126,6 +137,7 @@ const notes: RepoRecord = {
   remoteUrl: "https://github.com/laffan/garden-notes.git",
   publicUrl: "https://laffan.github.io/garden-notes/",
   folders: ["content/notes"],
+  uploadFolders: [],
   site: { ...profile, generator: "hugo", routes: [{ folder: "content/notes", pattern: "/notes/{path}/" }], assets: [{ urlPrefix: "/", repoPath: "static/" }], stylesheets: [] },
   addedAt: Date.now() - 86400000 * 40,
   lastFetched: Date.now() - 86400000,
@@ -419,17 +431,28 @@ const handlers: Record<string, Handler> = {
   repo_log: (a) => meta[String(a.id)].log.map((l, i) => ({ id: `${i}`, short: `abc${i}`, summary: l.summary, author: "laffan", time: l.time })),
   list_dirs: (a) => {
     const id = String(a.id);
-    const counts = new Map<string, number>();
+    const md = new Map<string, number>();
+    const all = new Map<string, number>();
     for (const p of Object.keys(files[id] ?? {})) {
       const dir = p.split("/").slice(0, -1).join("/");
-      counts.set(dir, (counts.get(dir) ?? 0) + 1);
+      all.set(dir, (all.get(dir) ?? 0) + 1);
+      if (isMarkdown(p)) md.set(dir, (md.get(dir) ?? 0) + 1);
     }
-    const extra = ["_includes", "_includes/partials", "public/blog-images", "public/essay-thumbnails", "scripts", "styles", "_data", "content", "static"];
-    const all = new Set([...counts.keys(), ...extra].filter(Boolean));
-    return [...all].sort().map((path) => ({ path, depth: path.split("/").length, markdown: counts.get(path) ?? 0, markdownTotal: [...counts.entries()].filter(([d]) => d === path || d.startsWith(`${path}/`)).reduce((s, [, n]) => s + n, 0) }));
+    const extra = ["_includes", "_includes/partials", "public", "public/essay-thumbnails", "scripts", "styles", "_data", "content", "static"];
+    const dirs = new Set([...all.keys(), ...extra].filter(Boolean));
+    const below = (counts: Map<string, number>, path: string) => [...counts.entries()].filter(([d]) => d === path || d.startsWith(`${path}/`)).reduce((s, [, n]) => s + n, 0);
+    return [...dirs].sort().map((path) => ({
+      path,
+      depth: path.split("/").length,
+      markdown: md.get(path) ?? 0,
+      markdownTotal: below(md, path),
+      files: all.get(path) ?? 0,
+      filesTotal: below(all, path),
+    }));
   },
   set_folders: (a) => {
-    repos = repos.map((r) => (r.id === a.id ? { ...r, folders: a.folders as string[] } : r));
+    const wanted = a.folders as string[];
+    repos = repos.map((r) => (r.id === a.id ? { ...r, folders: wanted, uploadFolders: r.uploadFolders.filter((f) => !wanted.includes(f)) } : r));
     return repos.find((r) => r.id === a.id);
   },
   list_folder: (a) => {
@@ -438,7 +461,7 @@ const handlers: Record<string, Handler> = {
     const repo = repos.find((r) => r.id === id)!;
     const kinds = new Map(changes(id).map((c) => [c.path, c.kind]));
     return Object.entries(files[id] ?? {})
-      .filter(([p]) => p.startsWith(`${folder}/`))
+      .filter(([p]) => p.startsWith(`${folder}/`) && isMarkdown(p))
       .map(([path, text]) => {
         const fm = parseFrontmatter(text);
         const name = path.split("/").pop()!;
@@ -471,7 +494,39 @@ const handlers: Record<string, Handler> = {
   },
   rename_file: () => undefined,
   delete_file: (a) => void delete files[String(a.id)][String(a.path)],
-  import_asset: (a) => `${a.dir}/${a.name}`,
+  import_asset: (a) => {
+    const id = String(a.id);
+    const clean = String(a.name).trim().replace(/[^A-Za-z0-9._-]/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+    if (!clean) throw `“${a.name}” has no usable file name`;
+    const dot = clean.lastIndexOf(".");
+    const [stem, ext] = dot > 0 ? [clean.slice(0, dot), clean.slice(dot)] : [clean, ""];
+    let candidate = clean;
+    for (let n = 2; `${a.dir}/${candidate}` in files[id]; n++) candidate = `${stem}-${n}${ext}`;
+    const path = `${a.dir}/${candidate}`;
+    files[id][path] = `binary:${Math.round((String(a.data).length * 3) / 4)}`;
+    uploadedAt[path] = Date.now();
+    return path;
+  },
+  set_upload_folders: (a) => {
+    const wanted = a.folders as string[];
+    repos = repos.map((r) => (r.id === a.id ? { ...r, uploadFolders: wanted, folders: r.folders.filter((f) => !wanted.includes(f)) } : r));
+    return repos.find((r) => r.id === a.id);
+  },
+  list_uploads: (a) => {
+    const id = String(a.id);
+    const folder = String(a.folder);
+    const kinds = new Map(changes(id).map((c) => [c.path, c.kind]));
+    return Object.entries(files[id] ?? {})
+      .filter(([p]) => p.startsWith(`${folder}/`))
+      .map(([path, text]) => ({
+        path,
+        name: path.split("/").pop()!,
+        size: text.startsWith("binary:") ? Number(text.slice(7)) : text.length,
+        modified: uploadedAt[path] ?? cloneTime,
+        change: kinds.get(path) ?? "",
+      }))
+      .sort((x, y) => y.modified - x.modified || x.path.localeCompare(y.path));
+  },
   detect_site: async (a) => {
     const id = String(a.id);
     if (a.useAi) {

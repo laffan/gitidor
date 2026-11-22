@@ -44,8 +44,20 @@ pointer on a dot to see what changed in that file since the last commit, word
 by word: deletions struck through in red, insertions highlighted in green.
 When the repository has changes, a **Commit** button with their count sits
 across from its name. The ☰ across from a folder's name has New post, Refresh
-and Remove. **Add Folder** is always last; it lists the clone's folders with
-their markdown counts and marks the ones the site's config says hold posts.
+and Remove. **Add Folder** is always last. Its switch chooses the kind of
+folder: a **content folder** (posts; the picker counts each folder's markdown
+and marks the ones the site's config says hold posts) or an **upload folder**.
+
+An **upload folder** lists every file in it — images as thumbnails, other
+files by type — as icons, or as a list from its ☰ menu. The **+** beside the ☰
+picks files to copy in (files can also be dropped on the folder); a name that
+is already there gets a number added rather than replacing the file. Uploads
+are new files like any other edit: they get a dot, and committing and pushing
+puts them on the site. GitHub refuses files over 100 MB, so those are left
+out. Clicking a file offers Insert into post (the markdown for it, with the
+URL the site serves it at), Copy markdown, and Delete; dragging one into the
+editor inserts it too. In the picker, the folders the site maps image URLs to
+are marked.
 
 Every column's edge can be dragged to change its width, and so can the line
 between the editor and the preview; double-click an edge to put it back.

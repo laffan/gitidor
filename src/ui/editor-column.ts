@@ -158,12 +158,7 @@ async function importImage(repoId: string, postPath: string, file: File): Promis
   const repo = repoById(repoId);
   const folder = postPath.split("/").slice(0, -1).join("/");
   const { dir } = imageDirectory(repo?.site ?? null, folder);
-  const data = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
+  const data = await actions.readBase64(file);
   const ext = file.type.split("/")[1]?.replace("jpeg", "jpg") ?? "png";
   const name = file.name && file.name !== "image.png" ? file.name : `image-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${ext}`;
   const saved = await api.importAsset(repoId, dir, name, data);

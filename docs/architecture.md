@@ -25,6 +25,7 @@ src/                         the interface (TypeScript, no framework)
   ui/resize.ts               draggable column edges, remembered per device
   ui/side-foot.ts            the footer under both side columns: Settings, night vision, console
   ui/rollback.ts             the Rollback sheet
+  ui/upload-folder.ts        an upload folder: thumbnails or list, the + picker, drops, file menu
   editor/editor.ts           CodeMirror setup
   editor/keymap.ts           the shortcut table (also drives Settings → Shortcuts)
   editor/frontmatter-ext.ts  keeps frontmatter out of the markdown parser; dim/fold;
@@ -57,7 +58,7 @@ Tauri's `app_data_dir` (the app container on iOS):
 
 | File | What |
 |---|---|
-| `repos.json` | repositories: remote, public URL, folders, site profile |
+| `repos.json` | repositories: remote, public URL, content and upload folders, site profile |
 | `settings.json` | appearance, commit defaults, AI provider and model |
 | `secrets.json` | GitHub token and login, AI keys — mode 0600 |
 | `clones/<id>/` | one full clone per repository |

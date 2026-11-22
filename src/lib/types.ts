@@ -76,6 +76,8 @@ export interface RepoRecord {
   remoteUrl: string;
   publicUrl: string;
   folders: string[];
+  /** Folders shown with thumbnails, that files can be uploaded into. */
+  uploadFolders: string[];
   site: SiteProfile | null;
   addedAt: number;
   lastFetched: number;
@@ -167,6 +169,18 @@ export interface DirInfo {
   depth: number;
   markdown: number;
   markdownTotal: number;
+  /** Files of any kind directly inside, and anywhere below. */
+  files: number;
+  filesTotal: number;
+}
+
+/** A file in an upload folder. */
+export interface UploadEntry {
+  path: string;
+  name: string;
+  size: number;
+  modified: number;
+  change: ChangeKind | "";
 }
 
 export interface FileEntry {

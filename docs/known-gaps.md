@@ -37,6 +37,16 @@ Most important first.
   trackpad they are only in the Commit sheet.
 - **Rolled-back commits** stay in the repository's reflog, but nothing in the
   app reads it; a rollback cannot be undone from here.
+- **Upload thumbnails are the files themselves**, loaded lazily through
+  `gitidor://local`; nothing is scaled down. A folder of large photographs
+  shows its first 300 and decodes them at full size as they scroll into view.
+- **Uploads cross IPC as base64**, one file at a time, so a large video is
+  held in memory twice on its way to disk. Files over 100 MB are refused
+  (GitHub's limit).
+- **Dropping files from Finder** onto an upload folder (or into the editor) is
+  verified only in Chromium. Tauri's own drag-and-drop handler is on by
+  default and may take file drops before the page sees them; the + button
+  does not depend on it.
 
 - **Keychain.** Secrets are in a 0600 file in the app's data directory, as in
   idlewild-editor. Keychain (macOS) and the iOS keychain are the better home.
