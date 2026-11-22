@@ -91,6 +91,7 @@ export const APP_SHORTCUTS: Shortcut[] = [
   { key: "Mod-Shift-p", label: "Toggle preview", group: "App" },
   { key: "Mod-\\", label: "Show or hide the side columns", group: "App" },
   { key: "Mod-Shift-k", label: "Commit…", group: "App" },
+  { key: "Mod-Shift-y", label: "Show or hide the console", group: "App" },
   { key: "Mod-,", label: "Settings", group: "App" },
   { key: "Mod-n", label: "New post in the first folder", group: "App" },
 ];

@@ -6,6 +6,7 @@ import { emit, folderKey, knownFile, repoById, store } from "./store";
 import type { RepoStatus } from "./types";
 import { toast } from "../ui/toast";
 import { newPostName, newPostText, todayIso } from "./frontmatter";
+import { log } from "./log";
 
 export async function boot() {
   const [platform, settings, secrets, repos] = await Promise.all([
@@ -88,6 +89,7 @@ export async function loadFolder(repoId: string, folder: string) {
 
 export async function setFolders(repoId: string, folders: string[]) {
   const updated = await api.setFolders(repoId, folders);
+  log.info("files", folders.length ? `Folders: ${updated.folders.join(", ")}` : "No folders chosen", repoId);
   store.repos = store.repos.map((r) => (r.id === repoId ? updated : r));
   emit("repos");
   await loadFolders(repoId);
@@ -112,6 +114,7 @@ export async function openFile(repoId: string, path: string) {
   await flushSave();
   try {
     const text = await api.readFile(repoId, path);
+    log.debug("files", `Opened ${path}`, repoId);
     store.openFile = { repoId, path, saved: text, text, state: "saved", error: null };
     store.layout.pane = "editor";
     emit("file", "layout", "files", "save");
@@ -154,6 +157,7 @@ export async function flushSave() {
   emit("save");
   try {
     await api.writeFile(f.repoId, f.path, text);
+    log.debug("files", `Saved ${f.path} (${(new Blob([text]).size / 1024).toFixed(1)} KB)`, f.repoId);
     f.saved = text;
     f.state = f.text === text ? "saved" : "editing";
     f.error = null;
@@ -165,6 +169,7 @@ export async function flushSave() {
   } catch (e) {
     f.state = "error";
     f.error = (e as Error).message;
+    log.error("files", `Could not save ${f.path}: ${f.error}`, f.repoId);
     emit("save");
   }
 }
@@ -184,6 +189,7 @@ export async function gitStep(id: string, label: string, work: () => Promise<voi
     return true;
   } catch (e) {
     store.errors[id] = (e as Error).message;
+    log.warn("app", `${label.replace(/…$/, "")} stopped: ${(e as Error).message}`, id);
     return false;
   } finally {
     store.busy[id] = undefined;
@@ -294,6 +300,7 @@ export async function createPost(repoId: string, folder: string, title: string) 
   const text = newPostText(sample, title, date);
   try {
     const path = await api.createFile(repoId, folder, name, text);
+    log.info("files", `Created ${path}`, repoId);
     await loadFolder(repoId, folder);
     await refreshStatus(repoId);
     await openFile(repoId, path);
@@ -309,6 +316,7 @@ export async function deleteFile(repoId: string, path: string, folder: string) {
   }
   try {
     await api.deleteFile(repoId, path);
+    log.info("files", `Deleted ${path}`, repoId);
     await loadFolder(repoId, folder);
     await refreshStatus(repoId);
   } catch (e) {

@@ -4,7 +4,7 @@
 
 import type { FileEntry, RepoRecord, RepoStatus, SecretStatus, Settings } from "./types";
 
-export type Topic = "repos" | "status" | "files" | "file" | "settings" | "secrets" | "layout" | "preview" | "save";
+export type Topic = "repos" | "status" | "files" | "file" | "settings" | "secrets" | "layout" | "preview" | "save" | "log" | "console";
 
 export interface OpenFile {
   repoId: string;
@@ -54,6 +54,7 @@ export const store = {
   openFile: null as OpenFile | null,
   layout: { repos: true, files: true, drawer: false, pane: "repos" as Pane },
   preview: { open: false, mode: "draft" as "draft" | "live" },
+  console: { open: false },
   online: typeof navigator === "undefined" ? true : navigator.onLine,
 };
 

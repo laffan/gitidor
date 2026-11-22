@@ -26,6 +26,8 @@ use serde::Serialize;
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 
+use crate::events::{self, size};
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
@@ -115,6 +117,17 @@ fn callbacks<'a>(token: Option<&'a str>, asked: &'a Cell<u32>) -> RemoteCallback
             None => Err(git2::Error::from_str("This repository needs a GitHub token")),
         }
     });
+    // What the server says while it works ("remote: Enumerating objects…").
+    // Its percentage lines repeat dozens of times; only the settled ones are
+    // worth a line in the console.
+    callbacks.sideband_progress(|data| {
+        for line in String::from_utf8_lossy(data).split(['\r', '\n']).map(str::trim).filter(|l| !l.is_empty()) {
+            if !line.contains('%') || line.ends_with("done.") {
+                events::debug("git", format!("remote: {line}"));
+            }
+        }
+        true
+    });
     callbacks
 }
 
@@ -162,11 +175,16 @@ pub fn clone(
     token: Option<&str>,
     progress: &dyn Fn(Progress),
 ) -> Result<String, String> {
+    events::info("git", format!("Cloning {}{}", url.trim_end_matches(".git"), branch.filter(|b| !b.is_empty()).map(|b| format!(" ({b})")).unwrap_or_default()));
+    let task = events::task("git", "Receiving objects", "objects");
+    let received_bytes = Cell::new(0usize);
+    let last = Cell::new(0usize);
     let asked = Cell::new(0);
     let mut cbs = callbacks(token, &asked);
-    let last = Cell::new(0usize);
     cbs.transfer_progress(|stats| {
         let received = stats.received_objects();
+        task.update(received as u64, stats.total_objects() as u64);
+        received_bytes.set(stats.received_bytes());
         // Throttled: libgit2 reports every object, and every report is an IPC
         // event the webview has to paint.
         if received == stats.total_objects() || received >= last.get() + 64 {
@@ -188,7 +206,10 @@ pub fn clone(
         let _ = std::fs::remove_dir_all(dest);
         network_failure(&e, token)
     })?;
-    Ok(current_branch(&repo))
+    task.finish(0, 0);
+    let branch = current_branch(&repo);
+    events::info("git", format!("Cloned {} on {branch}", size(received_bytes.get() as u64)));
+    Ok(branch)
 }
 
 pub fn open(path: &Path) -> Result<Repository, String> {
@@ -320,9 +341,23 @@ pub fn diff(repo: &Repository, path: &str) -> Result<String, String> {
 /// anything new?" call, safe to make whenever a repository is opened.
 pub fn fetch(repo: &Repository, branch: Option<&str>, token: Option<&str>) -> Result<(), String> {
     let mut remote = repo.find_remote("origin").map_err(err)?;
+    let tracking = branch.map(|b| format!("refs/remotes/origin/{b}"));
+    let before = tracking.as_deref().and_then(|r| repo.refname_to_id(r).ok());
+    events::debug("git", match branch {
+        Some(b) => format!("Fetching {b} from GitHub"),
+        None => "Fetching every branch from GitHub".to_string(),
+    });
     let asked = Cell::new(0);
+    let task = events::task("git", "Fetching", "objects");
+    let mut cbs = callbacks(token, &asked);
+    cbs.transfer_progress(|stats| {
+        if stats.total_objects() > 0 {
+            task.update(stats.received_objects() as u64, stats.total_objects() as u64);
+        }
+        true
+    });
     let mut options = FetchOptions::new();
-    options.remote_callbacks(callbacks(token, &asked));
+    options.remote_callbacks(cbs);
     options.proxy_options(proxy());
     options.download_tags(AutotagOption::None);
     let refspec = match branch {
@@ -333,7 +368,19 @@ pub fn fetch(repo: &Repository, branch: Option<&str>, token: Option<&str>) -> Re
         }
     };
     match remote.fetch(&[refspec.as_str()], Some(&mut options), None) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            let after = tracking.as_deref().and_then(|r| repo.refname_to_id(r).ok());
+            match (branch, before, after) {
+                (Some(b), Some(old), Some(new)) if old != new => {
+                    let n = repo.graph_ahead_behind(new, old).map(|(a, _)| a).unwrap_or(0);
+                    events::info("git", format!("{n} new commit{} on GitHub's {b}", if n == 1 { "" } else { "s" }));
+                }
+                (Some(b), None, Some(_)) => events::info("git", format!("Fetched {b} from GitHub")),
+                (Some(b), _, _) => events::debug("git", format!("Nothing new on GitHub's {b}")),
+                (None, _, _) => events::debug("git", "Fetched every branch"),
+            }
+            Ok(())
+        }
         // A branch made here and not pushed yet has nothing to fetch.
         Err(e) if branch.is_some() && e.message().contains("couldn't find remote ref") => Ok(()),
         Err(e) => Err(network_failure(&e, token)),
@@ -344,7 +391,14 @@ pub fn fetch(repo: &Repository, branch: Option<&str>, token: Option<&str>) -> Re
 pub fn pull(repo: &Repository, token: Option<&str>, who: &Signature) -> Result<PullOutcome, String> {
     let branch = current_branch(repo);
     fetch(repo, Some(&branch), token)?;
-    merge_upstream(repo, &branch, who)
+    let outcome = merge_upstream(repo, &branch, who)?;
+    events::info("git", match &outcome {
+        PullOutcome::UpToDate => format!("{branch} is already up to date"),
+        PullOutcome::NoUpstream => format!("{branch} is not on GitHub yet; nothing to pull"),
+        PullOutcome::FastForward { commits } => format!("Fast-forwarded {branch} by {commits} commit{}", if *commits == 1 { "" } else { "s" }),
+        PullOutcome::Merged { commits } => format!("Merged {commits} commit{} from GitHub into {branch}", if *commits == 1 { "" } else { "s" }),
+    });
+    Ok(outcome)
 }
 
 /// The local half of a pull: integrate `origin/<branch>` into `<branch>`.
@@ -438,13 +492,25 @@ pub fn push(repo: &Repository, token: Option<&str>) -> Result<(), String> {
     let mut remote = repo.find_remote("origin").map_err(err)?;
     let rejected: RefCell<Option<String>> = RefCell::new(None);
     let asked = Cell::new(0);
+    let before = repo.refname_to_id(&format!("refs/remotes/origin/{branch}")).ok();
+    events::info("git", format!("Pushing {branch} to GitHub"));
+    let task = events::task("git", "Sending objects", "objects");
     {
         let mut cbs = callbacks(token, &asked);
+        cbs.push_transfer_progress(|current, total, _bytes| {
+            if total > 0 {
+                task.update(current as u64, total as u64);
+            }
+        });
         // A refused ref is *not* an error from `push` — libgit2 reports it
         // here, per reference, and `push` itself returns Ok.
-        cbs.push_update_reference(|_name, status| {
-            if let Some(message) = status {
-                *rejected.borrow_mut() = Some(message.to_string());
+        cbs.push_update_reference(|name, status| {
+            match status {
+                Some(message) => {
+                    events::warn("git", format!("GitHub refused {name}: {message}"));
+                    *rejected.borrow_mut() = Some(message.to_string());
+                }
+                None => events::debug("git", format!("GitHub accepted {name}")),
             }
             Ok(())
         });
@@ -472,6 +538,13 @@ pub fn push(repo: &Repository, token: Option<&str>) -> Result<(), String> {
     // without another fetch.
     let head = repo.refname_to_id(&format!("refs/heads/{branch}")).map_err(err)?;
     repo.reference(&format!("refs/remotes/origin/{branch}"), head, true, "gitidor: push").map_err(err)?;
+    task.finish(0, 0);
+    let short = |oid: git2::Oid| oid.to_string()[..7].to_string();
+    events::info("git", match before {
+        Some(old) if old != head => format!("Pushed {}..{} to {branch}", short(old), short(head)),
+        Some(_) => format!("{branch} was already on GitHub"),
+        None => format!("Pushed {branch} to GitHub as a new branch ({})", short(head)),
+    });
     Ok(())
 }
 
@@ -510,7 +583,9 @@ pub fn commit(repo: &Repository, paths: &[String], message: &str, who: &Signatur
     let parents: Vec<&git2::Commit> = parent.iter().collect();
     let oid = repo.commit(Some("HEAD"), who, who, message.trim(), &tree, &parents).map_err(err)?;
     let commit = repo.find_commit(oid).map_err(err)?;
-    Ok(commit_info(&commit))
+    let info = commit_info(&commit);
+    events::info("git", format!("Committed {} “{}” ({} file{})", info.short, info.summary, paths.len(), if paths.len() == 1 { "" } else { "s" }));
+    Ok(info)
 }
 
 /// Stage everything — used only by tests to build fixtures.
@@ -546,6 +621,7 @@ pub fn discard(repo: &Repository, path: &str) -> Result<(), String> {
         let _ = index.remove_path(&rel);
         index.write().map_err(err)?;
     }
+    events::info("git", if in_head { format!("Restored {path} from the last commit") } else { format!("Deleted {path}, which was new") });
     Ok(())
 }
 
@@ -595,9 +671,11 @@ pub fn checkout(repo: &Repository, name: &str, create: bool) -> Result<(), Strin
         let head = repo.head().map_err(err)?.peel_to_commit().map_err(err)?;
         repo.branch(&name, &head, false).map_err(err)?;
         repo.set_head(&refname).map_err(err)?;
+        events::info("git", format!("Created branch {name} from {}", current_branch(repo)));
         return Ok(());
     }
 
+    let from_github = repo.find_reference(&refname).is_err();
     let target = match repo.find_reference(&refname) {
         Ok(r) => r.peel_to_commit().map_err(err)?,
         Err(_) => {
@@ -614,6 +692,7 @@ pub fn checkout(repo: &Repository, name: &str, create: bool) -> Result<(), Strin
     repo.checkout_tree(target.as_object(), Some(CheckoutBuilder::new().safe()))
         .map_err(|e| local_edits_conflict(repo, &e))?;
     repo.set_head(&refname).map_err(err)?;
+    events::info("git", if from_github { format!("Switched to {name}, made from GitHub's {name}") } else { format!("Switched to {name}") });
     Ok(())
 }
 

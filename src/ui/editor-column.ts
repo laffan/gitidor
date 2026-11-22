@@ -10,6 +10,7 @@ import { imageDirectory, imageReference, publicAddress } from "../lib/site";
 import { createEditor, type EditorAppearance, type EditorHandle } from "../editor/editor";
 import { previewPane } from "./preview";
 import { assetUrl } from "./asset-url";
+import { log } from "../lib/log";
 
 let editor: EditorHandle | null = null;
 export const getEditor = () => editor;
@@ -152,6 +153,7 @@ async function importImage(repoId: string, postPath: string, file: File): Promis
   const ext = file.type.split("/")[1]?.replace("jpeg", "jpg") ?? "png";
   const name = file.name && file.name !== "image.png" ? file.name : `image-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${ext}`;
   const saved = await api.importAsset(repoId, dir, name, data);
+  log.info("files", `Saved image ${saved} (${(file.size / 1024).toFixed(0)} KB)`, repoId);
   void actions.refreshStatus(repoId);
   const ref = imageReference(repo?.site ?? null, postPath, saved);
   const alt = name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");

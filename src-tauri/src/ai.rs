@@ -148,6 +148,8 @@ fn anthropic(key: &str, model: &str, system: &str, user: &str, schema: &Value) -
         body["fallbacks"] = json!("default");
         request = request.header("anthropic-beta", ANTHROPIC_FALLBACK_BETA);
     }
+    crate::events::info("ai", format!("Asking Anthropic ({model}) about the site's structure"));
+    let started = std::time::Instant::now();
     let mut response = request.send_json(&body).map_err(|e| http::transport_error(&e, "Anthropic"))?;
     let status = response.status().as_u16();
     let text = response.body_mut().with_config().limit(8 * 1024 * 1024).read_to_string().unwrap_or_default();
@@ -155,6 +157,17 @@ fn anthropic(key: &str, model: &str, system: &str, user: &str, schema: &Value) -
         return Err(format!("Anthropic answered {status}: {}", http::error_message(&text)));
     }
     let reply: Value = serde_json::from_str(&text).map_err(|e| format!("Anthropic's answer could not be read: {e}"))?;
+    let served = reply.get("model").and_then(|m| m.as_str()).unwrap_or(model);
+    crate::events::info(
+        "ai",
+        format!(
+            "Anthropic answered in {:.1} s — {} tokens in, {} out{}",
+            started.elapsed().as_secs_f32(),
+            reply.pointer("/usage/input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            reply.pointer("/usage/output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            if served != model { format!(" (served by {served} after a fallback)") } else { String::new() },
+        ),
+    );
     parse_anthropic(&reply)
 }
 
@@ -190,6 +203,8 @@ fn openai(key: &str, model: &str, system: &str, user: &str, schema: &Value) -> R
         ],
         "text": { "format": { "type": "json_schema", "name": "site_profile", "schema": schema, "strict": true } },
     });
+    crate::events::info("ai", format!("Asking OpenAI ({model}) about the site's structure"));
+    let started = std::time::Instant::now();
     let mut response = http::api()
         .post("https://api.openai.com/v1/responses")
         .header("Authorization", &format!("Bearer {key}"))
@@ -202,6 +217,15 @@ fn openai(key: &str, model: &str, system: &str, user: &str, schema: &Value) -> R
         return Err(format!("OpenAI answered {status}: {}", http::error_message(&text)));
     }
     let reply: Value = serde_json::from_str(&text).map_err(|e| format!("OpenAI's answer could not be read: {e}"))?;
+    crate::events::info(
+        "ai",
+        format!(
+            "OpenAI answered in {:.1} s — {} tokens in, {} out",
+            started.elapsed().as_secs_f32(),
+            reply.pointer("/usage/input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            reply.pointer("/usage/output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+        ),
+    );
     parse_openai(&reply)
 }
 
@@ -276,6 +300,7 @@ where the config says otherwise. Put anything uncertain, briefly, in notes.";
 /// Ask the model for a site profile, starting from the rule-based one.
 pub fn detect_site(root: &Path, heuristic: &SiteProfile, folders: &[String]) -> Result<SiteProfile, String> {
     let user = context(root, heuristic, folders);
+    crate::events::debug("ai", format!("Sending the file listing, config files and sample posts ({} characters)", user.len()));
     let answer = complete_json(SYSTEM, &user, &profile_schema())?;
     let mut profile: SiteProfile = serde_json::from_value(answer).map_err(|e| format!("The model's site profile did not fit: {e}"))?;
     profile.source = "ai".into();

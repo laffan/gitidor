@@ -879,7 +879,8 @@ button.link:hover {
 
 .toasts {
   position: fixed;
-  bottom: calc(18px + var(--safe-bottom));
+  /* Above the console when it is open (console.ts sets --console-h). */
+  bottom: calc(18px + var(--safe-bottom) + var(--console-h, 0px));
   left: 50%;
   transform: translateX(-50%);
   display: flex;

@@ -16,10 +16,12 @@ src/                         the interface (TypeScript, no framework)
   lib/site.ts                image references → repository paths (site profile)
   lib/frontmatter.ts         YAML/TOML frontmatter; new-post naming and template
   lib/theme.ts               Appearance → CSS custom properties
-  ui/                        the three columns and every sheet
+  lib/log.ts                 the console's lines and progress bars
+  ui/                        the three columns, every sheet, the console
   editor/editor.ts           CodeMirror setup
   editor/keymap.ts           the shortcut table (also drives Settings → Shortcuts)
-  editor/frontmatter-ext.ts  keeps frontmatter out of the markdown parser; dim/fold
+  editor/frontmatter-ext.ts  keeps frontmatter out of the markdown parser; dim/fold;
+                             marks lines the YAML/TOML parser rejects
   editor/images.ts           inline image widgets
   editor/hush/               ported from hush, kept close to the original
   mock/mock-backend.ts       in-memory backend for browser development
@@ -39,6 +41,7 @@ src-tauri/src/
   ai.rs           Anthropic and OpenAI: key test, structured site detection
   scheme.rs       gitidor:// — local files and the live-site proxy
   http.rs         one ureq client; platform trust store; env proxies
+  events.rs       the `log` event: lines and progress for the console
 ```
 
 ## Storage
@@ -121,6 +124,36 @@ inserted HTML never runs scripts and scroll position survives re-rendering.
 The host-based form is how WebKit hands custom schemes to the app on macOS,
 iOS and Linux. Windows and Android rewrite them to `http://gitidor.localhost`,
 which loses the host — not a target platform, but noted.
+
+## Frontmatter validation
+
+`frontmatterIssues` in `lib/frontmatter.ts` parses the block with `yaml`'s
+`parseDocument` (every error, with its offsets) or `smol-toml` (the first
+error, with its line). Only a parser error marks a line. YAML reports some
+errors across a range, or on the line before the real problem (an
+over-indented key is reported on its parent), so each error is placed on the
+most suspicious line in or just after its range — one with no colon, an
+unbalanced quote, an unclosed bracket, a second unquoted `: `, or indentation
+under a line that opened no block. Those checks never mark a line by
+themselves. Folded frontmatter unfolds while it has an error.
+
+## The console
+
+`events.rs` sends one Tauri event, `log`, for both kinds of report: a line
+(level, source, message) and a progress update (the same task id with a
+growing count, `done` on the last). Commands that work on a repository open a
+thread-local scope, so everything logged during them carries its id without
+being passed one. libgit2's callbacks feed it: `transfer_progress` and
+`push_transfer_progress` drive the bars (throttled to a few updates a second),
+`sideband_progress` gives the server's `remote:` lines, and
+`push_update_reference` reports each reference GitHub accepted or refused.
+Every message goes through `secrets::redact` before it is sent.
+
+On the webview side `lib/log.ts` keeps the last 3,000 lines and the active
+tasks, merges repeats (the same failure reported by the backend and by the
+call that saw it) into one line with a count, and repaints at most once a
+frame. `ipc.ts` adds a line for every backend call with its duration, except
+the few made constantly. The log lives in memory; it starts empty each launch.
 
 ## Secrets
 

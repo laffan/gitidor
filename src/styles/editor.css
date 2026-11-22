@@ -81,9 +81,17 @@
   margin: 2px 0;
 }
 
-.cm-frontmatter-error {
-  text-decoration: underline wavy var(--deleted);
-  text-underline-offset: 3px;
+/* A frontmatter line the YAML (or TOML) parser rejects. The message is the
+   line's tooltip. */
+.cm-line.cm-frontmatter-invalid,
+.cm-line.cm-frontmatter-invalid .cm-frontmatter-key {
+  color: var(--deleted);
+}
+
+.cm-line.cm-frontmatter-invalid {
+  background: color-mix(in srgb, var(--deleted) 9%, transparent);
+  border-radius: 3px;
+  cursor: help;
 }
 
 /* Markdown syntax characters, quietened. */

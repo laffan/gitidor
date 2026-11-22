@@ -2,6 +2,7 @@
 // in a plain browser (`npm run dev` without Tauri, and the screenshot harness)
 // they go to an in-memory mock so the interface can be worked on anywhere.
 
+import { addLog, log, type Incoming } from "./log";
 import type {
   Branches,
   CloneProgress,
@@ -38,14 +39,33 @@ function load() {
   return backend;
 }
 
+// Calls made often enough that timing each one would bury everything else.
+const QUIET = new Set(["repo_status", "secret_status", "get_settings", "platform", "site_lookup"]);
+
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const b = await load();
+  const started = performance.now();
+  const repoId = typeof args?.id === "string" ? args.id : null;
   try {
-    return await b.invoke<T>(cmd, args);
+    const out = await b.invoke<T>(cmd, args);
+    if (!QUIET.has(cmd)) log.debug("ipc", `${cmd}${describeArgs(args)} — ${Math.round(performance.now() - started)} ms`, repoId);
+    return out;
   } catch (e) {
     // Commands reject with the Rust `String` error; keep it as an Error.
-    throw new Error(typeof e === "string" ? e : (e as Error)?.message ?? String(e));
+    const message = typeof e === "string" ? e : ((e as Error)?.message ?? String(e));
+    log.error("ipc", message, repoId);
+    throw new Error(message);
   }
+}
+
+/** The arguments worth showing beside a call's name: paths and names, never
+ *  file contents or keys. */
+function describeArgs(args?: Record<string, unknown>): string {
+  if (!args) return "";
+  const shown = ["path", "folder", "branch", "address", "provider", "from", "to"]
+    .filter((k) => typeof args[k] === "string" && args[k])
+    .map((k) => String(args[k]));
+  return shown.length ? ` ${shown.join(" ")}` : "";
 }
 
 export const api = {
@@ -95,6 +115,12 @@ export const api = {
   saveSite: (id: string, profile: SiteProfile) => call<RepoRecord>("save_site", { id, profile }),
   siteLookup: (id: string, urlPath: string) => call<string | null>("site_lookup", { id, urlPath }),
 };
+
+/** Lines and progress from the Rust side, straight into the console's log. */
+export async function listenForLogs(): Promise<() => void> {
+  const b = await load();
+  return b.listen<Incoming>("log", (e) => addLog(e));
+}
 
 export async function onCloneProgress(handler: (p: CloneProgress) => void): Promise<() => void> {
   const b = await load();

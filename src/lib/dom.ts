@@ -80,6 +80,8 @@ const PATHS: Record<string, string> = {
   keyboard: "M3 6h18v12H3z M7 10h.01 M11 10h.01 M15 10h.01 M7 14h10",
   undo: "M9 14 4 9l5-5 M4 9h11a5 5 0 0 1 0 10h-2",
   image: "M4 5h16v14H4z M4 16l5-5 4 4 3-3 4 4 M15 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z",
+  terminal: "M4 5h16v14H4z M7.5 9.5l3 2.5-3 2.5 M12.5 15h4",
+  copy: "M9 9h11v11H9z M5 15H4V4h11v1",
   cloudoff: "M3 3l18 18 M8 6.5A6 6 0 0 1 17.7 10H18a4 4 0 0 1 2.6 7 M16 18H7a5 5 0 0 1-1.7-9.7",
 };
 

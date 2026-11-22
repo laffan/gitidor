@@ -46,7 +46,11 @@ fn local(id: &str, path: &str) -> Outcome {
     if file.is_dir() {
         file = file.join("index.html");
     }
-    let bytes = std::fs::read(&file).map_err(|_| (StatusCode::NOT_FOUND, format!("{decoded} is not in this repository")))?;
+    let bytes = std::fs::read(&file).map_err(|_| {
+        let _scope = crate::events::scope(id);
+        crate::events::warn("preview", format!("Not in the repository: {decoded}"));
+        (StatusCode::NOT_FOUND, format!("{decoded} is not in this repository"))
+    })?;
     Ok(respond(StatusCode::OK, mime_for(&decoded), bytes, "no-cache"))
 }
 
@@ -54,6 +58,8 @@ const MAX_BODY: u64 = 32 * 1024 * 1024;
 
 fn live(id: &str, path: &str, query: &str) -> Outcome {
     let id = checked_id(id).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let _scope = crate::events::scope(id);
+    let started = std::time::Instant::now();
     let record = repos::get(id).map_err(|e| (StatusCode::NOT_FOUND, e))?;
     let (origin, _base) = crate::remote::split_public_url(&record.public_url)
         .ok_or((StatusCode::NOT_FOUND, "This repository has no public URL yet. Add one in its settings.".to_string()))?;
@@ -66,7 +72,9 @@ fn live(id: &str, path: &str, query: &str) -> Outcome {
     let mut response = None;
     for _ in 0..6 {
         let reply = crate::http::proxy().get(&current).call().map_err(|e| {
-            (StatusCode::BAD_GATEWAY, crate::http::transport_error(&e, &host))
+            let message = crate::http::transport_error(&e, &host);
+            crate::events::warn("preview", format!("{path}: {message}"));
+            (StatusCode::BAD_GATEWAY, message)
         })?;
         let status = reply.status();
         if status.is_redirection() {
@@ -76,6 +84,7 @@ fn live(id: &str, path: &str, query: &str) -> Outcome {
                 return Ok(leaving_page(&next));
             }
             final_path = next[origin.len()..].split(['?', '#']).next().unwrap_or("/").to_string();
+            crate::events::debug("preview", format!("{path} redirects to {final_path}"));
             current = next;
             continue;
         }
@@ -98,6 +107,14 @@ fn live(id: &str, path: &str, query: &str) -> Outcome {
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("The page could not be read: {e}")))?;
 
     let lower = mime.to_ascii_lowercase();
+    let line = format!("{} {final_path} → {} ({}, {} ms)", if lower.starts_with("text/html") { "Page" } else { "Asset" }, status.as_u16(), crate::events::size(bytes.len() as u64), started.elapsed().as_millis());
+    if status.is_client_error() || status.is_server_error() {
+        crate::events::warn("preview", line);
+    } else if lower.starts_with("text/html") {
+        crate::events::info("preview", line);
+    } else {
+        crate::events::debug("preview", line);
+    }
     if lower.starts_with("text/html") {
         let html = String::from_utf8_lossy(&bytes).to_string();
         let redirected = (final_path != path).then_some(final_path.as_str());

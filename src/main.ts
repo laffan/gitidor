@@ -14,6 +14,7 @@ import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/modal.css";
 import "./styles/editor.css";
+import "./styles/console.css";
 
 import { h } from "./lib/dom";
 import { on, store } from "./lib/store";
@@ -27,10 +28,15 @@ import { openCommit } from "./ui/commit";
 import { modalIsOpen, promptModal } from "./ui/modal";
 import { toast } from "./ui/toast";
 import { activeRepo } from "./lib/store";
+import { consolePanel, toggleConsole } from "./ui/console";
+import { listenForLogs } from "./lib/ipc";
+import { log } from "./lib/log";
 
 const app = document.getElementById("app")!;
 const scrim = h("div", { class: "drawer-scrim", onclick: () => actions.setLayout({ drawer: false }) });
 app.append(reposColumn(), filesColumn(), editorColumn(), scrim);
+document.body.appendChild(consolePanel());
+void listenForLogs();
 
 function layout() {
   app.classList.toggle("hide-repos", !store.layout.repos);
@@ -54,6 +60,10 @@ window.addEventListener(
     if (key === "," && !e.shiftKey) {
       e.preventDefault();
       openSettings();
+    } else if (key === "y" && e.shiftKey) {
+      // ⇧⌘Y, as Xcode shows and hides its debug area.
+      e.preventDefault();
+      toggleConsole();
     } else if (modalIsOpen()) {
       return;
     } else if (key === "s" && !e.shiftKey) {
@@ -96,6 +106,10 @@ actions
   .boot()
   .then(() => {
     document.documentElement.classList.toggle("platform-macos", store.platform === "macos");
+    log.info("app", `gitidor ${__APP_VERSION__} on ${store.platform || "a browser"} — ${store.repos.length} repositor${store.repos.length === 1 ? "y" : "ies"}${store.online ? "" : ", offline"}`);
     if (!store.repos.length) actions.setLayout({ pane: "repos" });
   })
-  .catch((e) => toast(`gitidor could not start: ${(e as Error).message}`, "error", 15000));
+  .catch((e) => {
+    log.error("app", `gitidor could not start: ${(e as Error).message}`);
+    toast(`gitidor could not start: ${(e as Error).message}`, "error", 15000);
+  });

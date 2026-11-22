@@ -45,5 +45,7 @@ Most important first.
 - **Live preview fidelity.** The proxy serves pages with their own scripts,
   but with an opaque origin: anything that needs cookies or `localStorage`
   will not work in the preview. Static blogs are unaffected.
+- **The console is not kept.** It starts empty at each launch; Copy is the way
+  to keep a session's log.
 - **Windows and Android.** Not targets; the live preview's addressing would
   need a different scheme form there.

@@ -1,0 +1,274 @@
+/* The console: slides up over the bottom of the window. */
+
+.console {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 45;
+  height: 36vh;
+  min-height: 120px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-top: 1px solid var(--line-strong);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.1);
+  transform: translateY(105%);
+  visibility: hidden;
+  transition:
+    transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 0.22s;
+  padding-bottom: var(--safe-bottom);
+}
+
+.console.open {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.console.resizing {
+  transition: none;
+  user-select: none;
+}
+
+html[data-theme="dark"] .console {
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.45);
+}
+
+.console-resize {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  height: 9px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.console-resize::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  width: 36px;
+  height: 4px;
+  margin-left: -18px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.console-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px max(10px, var(--safe-right)) 8px max(14px, var(--safe-left));
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.console-bar strong {
+  font-size: 12.5px;
+  margin-right: 4px;
+}
+
+.segmented.small button {
+  padding: 2px 9px;
+  font-size: 12px;
+}
+
+.console-details {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.console-search {
+  width: 180px;
+}
+
+.console-search .input.search {
+  height: 26px;
+}
+
+.console-count {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.console-tasks {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-files);
+}
+
+.console-task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(80px, 30%) auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.console-task .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-task .repo {
+  color: var(--text-3);
+  margin-left: 8px;
+}
+
+.console-task .progress {
+  margin: 0;
+}
+
+.console-task .nums {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.console-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 10px;
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  line-height: 1.55;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.console-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 1px max(14px, var(--safe-right)) 1px max(14px, var(--safe-left));
+}
+
+.console-row:hover {
+  background: var(--bg-hover);
+}
+
+.console-row time {
+  flex: none;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.console-row .lvl {
+  flex: none;
+  width: 30px;
+  font-weight: 700;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.console-row .src {
+  flex: none;
+  width: 54px;
+  color: var(--text-2);
+}
+
+.console-row .repo {
+  flex: none;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent-text);
+}
+
+.console-row .msg {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.console-row .times {
+  flex: none;
+  color: var(--text-3);
+}
+
+.console-row.lvl-debug .msg {
+  color: var(--text-2);
+}
+
+.console-row.lvl-warn {
+  background: color-mix(in srgb, var(--modified) 7%, transparent);
+}
+
+.console-row.lvl-warn .lvl,
+.console-row.lvl-warn .msg {
+  color: var(--warn-text);
+}
+
+.console-row.lvl-error {
+  background: color-mix(in srgb, var(--deleted) 8%, transparent);
+}
+
+.console-row.lvl-error .lvl,
+.console-row.lvl-error .msg {
+  color: var(--error-text);
+}
+
+.console-empty {
+  color: var(--text-3);
+  padding: 18px 14px;
+  font-family: var(--ui-font);
+  font-size: 12.5px;
+}
+
+/* The button beside Settings. */
+.icon-btn .badge.error {
+  background: var(--deleted);
+}
+
+.console-btn.working::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: console-pulse 1s ease-in-out infinite;
+}
+
+@keyframes console-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (max-width: 700px) {
+  .console {
+    height: 60vh;
+  }
+  .console-search {
+    width: 100%;
+    order: 10;
+  }
+  .console-row .repo,
+  .console-row .lvl {
+    display: none;
+  }
+}

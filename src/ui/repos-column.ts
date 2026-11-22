@@ -12,8 +12,10 @@ import { openAddRepo } from "./add-repo";
 import { openCommit } from "./commit";
 import { openRepoSettings } from "./repo-settings";
 import { openSettings } from "./settings";
+import { consoleButton } from "./console";
 import { confirmModal, promptModal } from "./modal";
 import { toast } from "./toast";
+import { log } from "../lib/log";
 
 export function reposColumn(): HTMLElement {
   const body = h("div", { class: "column-body" });
@@ -32,6 +34,7 @@ export function reposColumn(): HTMLElement {
       "div",
       { class: "column-foot" },
       iconButton("gear", "Settings (⌘,)", () => openSettings()),
+      consoleButton(),
       h("span", { style: "flex:1" }),
       offline,
     ),
@@ -51,10 +54,12 @@ export function reposColumn(): HTMLElement {
   on(["repos", "status"], render);
   window.addEventListener("online", () => {
     store.online = true;
+    log.info("app", "Back online");
     render();
   });
   window.addEventListener("offline", () => {
     store.online = false;
+    log.warn("app", "Offline — editing and committing carry on; pull and push wait for the network");
     render();
   });
   render();

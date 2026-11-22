@@ -7,6 +7,7 @@
 //! one that paints.
 
 mod ai;
+mod events;
 mod files;
 mod frontmatter;
 mod github_api;
@@ -32,17 +33,26 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Res<T> + Send + 'sta
     tauri::async_runtime::spawn_blocking(work).await.map_err(|e| e.to_string())?
 }
 
+/// Every failure reaches the console, whichever command it came from.
+fn reported<T>(source: &'static str, result: Res<T>) -> Res<T> {
+    if let Err(message) = &result {
+        events::log(events::Level::Error, source, message.clone());
+    }
+    result
+}
+
 /// Run `work` against one repository's clone with its git lock held.
 async fn with_repo<T: Send + 'static>(
     id: String,
     work: impl FnOnce(&RepoRecord, &git2::Repository) -> Res<T> + Send + 'static,
 ) -> Res<T> {
     blocking(move || {
+        let _scope = events::scope(&id);
         let record = repos::get(&id)?;
         let lock = repos::git_lock(&id);
         let _guard = lock.lock().map_err(|_| "Another git operation failed part-way; restart the app.")?;
         let repo = gitops::open(&store::clone_dir(&id)?)?;
-        work(&record, &repo)
+        reported("git", work(&record, &repo))
     })
     .await
 }
@@ -77,7 +87,8 @@ async fn github_sign_in(token: String) -> Res<secrets::SecretStatus> {
         if token.is_empty() {
             return Err("Paste a token first".into());
         }
-        let login = github_api::whoami(&token)?;
+        let login = reported("github", github_api::whoami(&token))?;
+        events::info("github", format!("Signed in to GitHub as {login}"));
         let mut s = secrets::load()?;
         s.github_token = token;
         s.github_login = login;
@@ -94,6 +105,7 @@ async fn github_sign_out() -> Res<secrets::SecretStatus> {
         s.github_token.clear();
         s.github_login.clear();
         secrets::save(&s)?;
+        events::info("github", "Signed out of GitHub; the token was deleted from this device");
         secrets::status()
     })
     .await
@@ -110,6 +122,7 @@ async fn set_ai_key(provider: String, key: String) -> Res<secrets::SecretStatus>
             other => return Err(format!("{other} is not a provider gitidor knows")),
         }
         secrets::save(&s)?;
+        events::info("ai", format!("{} key {}", if provider == "openai" { "OpenAI" } else { "Anthropic" }, if key.trim().is_empty() { "removed" } else { "saved" }));
         secrets::status()
     })
     .await
@@ -117,7 +130,14 @@ async fn set_ai_key(provider: String, key: String) -> Res<secrets::SecretStatus>
 
 #[tauri::command]
 async fn test_ai_key(provider: String) -> Res<ai::KeyTest> {
-    blocking(move || ai::test_key(&provider).map_err(|e| secrets::redact(&e))).await
+    blocking(move || {
+        let result = reported("ai", ai::test_key(&provider).map_err(|e| secrets::redact(&e)));
+        if let Ok(test) = &result {
+            events::info("ai", format!("{} key works; {} models available", if provider == "openai" { "OpenAI" } else { "Anthropic" }, test.models.len()));
+        }
+        result
+    })
+    .await
 }
 
 // ── GitHub ──────────────────────────────────────────────────────────────────
@@ -135,9 +155,22 @@ struct RepoCheck {
 #[tauri::command]
 async fn github_check_repo(address: String) -> Res<RepoCheck> {
     blocking(move || {
-        let addr = remote::parse(&address)?;
+        let addr = reported("github", remote::parse(&address))?;
         let token = secrets::github_token();
-        let info = github_api::repo_info(token.as_deref(), &addr.owner, &addr.repo)?;
+        events::info("github", format!("Checking access to {}/{}", addr.owner, addr.repo));
+        let info = reported("github", github_api::repo_info(token.as_deref(), &addr.owner, &addr.repo))?;
+        events::info(
+            "github",
+            format!(
+                "{}: {}, {}, {} branch{}, published at {}",
+                info.full_name,
+                if info.private { "private" } else { "public" },
+                if info.can_push { "you can push" } else { "read-only" },
+                info.branches.len(),
+                if info.branches.len() == 1 { "" } else { "es" },
+                info.pages_url
+            ),
+        );
         Ok(RepoCheck { clone_url: addr.clone_url(), info })
     })
     .await
@@ -173,8 +206,9 @@ struct CloneProgress {
 #[tauri::command]
 async fn add_repo(app: AppHandle, request_id: String, address: String, public_url: String, branch: String) -> Res<RepoRecord> {
     blocking(move || {
-        let addr = remote::parse(&address)?;
+        let addr = reported("git", remote::parse(&address))?;
         let id = store::new_id();
+        let _scope = events::scope(&id);
         let dest = store::clone_dir(&id)?;
         let token = secrets::github_token();
         let emit = |p: gitops::Progress| {
@@ -184,9 +218,10 @@ async fn add_repo(app: AppHandle, request_id: String, address: String, public_ur
             );
         };
         let branch = if branch.trim().is_empty() { None } else { Some(remote::checked_branch(&branch)?) };
-        gitops::clone(&addr.clone_url(), branch.as_deref(), &dest, token.as_deref(), &emit)?;
+        reported("git", gitops::clone(&addr.clone_url(), branch.as_deref(), &dest, token.as_deref(), &emit))?;
 
         let profile = site::detect(&dest);
+        events::info("app", describe_profile(&profile));
         // A CNAME found in the clone beats the conventional github.io guess
         // the sheet may have prefilled, but never an address somebody typed.
         let typed = public_url.trim();
@@ -449,11 +484,13 @@ async fn detect_site(id: String, use_ai: bool) -> Res<site::SiteProfile> {
         let record = repos::get(&id)?;
         let root = store::clone_dir(&id)?;
         let heuristic = site::detect(&root);
+        let _scope = events::scope(&id);
         let profile = if use_ai {
-            ai::detect_site(&root, &heuristic, &record.folders).map_err(|e| secrets::redact(&e))?
+            reported("ai", ai::detect_site(&root, &heuristic, &record.folders).map_err(|e| secrets::redact(&e)))?
         } else {
             heuristic
         };
+        events::info(if use_ai { "ai" } else { "app" }, describe_profile(&profile));
         repos::update(&id, |r| r.site = Some(profile.clone()))?;
         Ok(profile)
     })
@@ -498,6 +535,20 @@ async fn site_lookup(id: String, url_path: String) -> Res<Option<String>> {
     .await
 }
 
+/// One line saying what a site profile found, for the console.
+fn describe_profile(p: &site::SiteProfile) -> String {
+    let routes: Vec<String> = p.routes.iter().map(|r| format!("{} → {}", r.folder, r.pattern)).collect();
+    let assets = p.assets.iter().filter(|a| a.url_prefix != "/").count();
+    format!(
+        "Site structure ({}{}): {}; {} image folder{} mapped",
+        if p.generator == "unknown" { "generator not recognised" } else { &p.generator },
+        match p.source.as_str() { "ai" => ", from AI", "manual" => ", edited", _ => ", from config" },
+        if routes.is_empty() { "no post folders".to_string() } else { routes.join(", ") },
+        assets,
+        if assets == 1 { "" } else { "s" },
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -508,6 +559,7 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             store::set_root(dir)?;
+            events::init(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

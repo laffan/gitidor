@@ -12,7 +12,7 @@
 import type { MarkdownConfig } from "@lezer/markdown";
 import { EditorState, Facet, RangeSetBuilder, StateField, type Extension } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
-import { findFrontmatter, parseFrontmatter } from "../lib/frontmatter";
+import { findFrontmatter, frontmatterIssues, parseFrontmatter, type FrontmatterIssue } from "../lib/frontmatter";
 
 const SCAN = 64 * 1024;
 
@@ -76,6 +76,19 @@ class FoldWidget extends WidgetType {
   }
 }
 
+// Validation runs on every edit inside the block; the last answer is kept so a
+// selection change (which rebuilds decorations) does not parse again.
+let lastRaw = "";
+let lastIssues: FrontmatterIssue[] = [];
+function issuesFor(head: string, end: number): FrontmatterIssue[] {
+  const raw = head.slice(0, end);
+  if (raw !== lastRaw) {
+    lastRaw = raw;
+    lastIssues = frontmatterIssues(head);
+  }
+  return lastIssues;
+}
+
 function build(state: EditorState): DecorationSet {
   const head = state.sliceDoc(0, Math.min(state.doc.length, SCAN));
   const found = findFrontmatter(head);
@@ -85,8 +98,11 @@ function build(state: EditorState): DecorationSet {
   const sel = state.selection.main;
   const inside = sel.from <= end && sel.to >= 0 && sel.from < found.end;
   const builder = new RangeSetBuilder<Decoration>();
+  const issues = issuesFor(head, found.end);
+  const byLine = new Map(issues.map((i) => [i.line, i.message]));
 
-  if (mode === "fold" && !inside) {
+  // Folded frontmatter with an error in it would hide the error; show it.
+  if (mode === "fold" && !inside && !issues.length) {
     const fm = parseFrontmatter(head);
     const keys = fm ? Object.keys(fm.data) : [];
     const title = fm && typeof fm.data.title === "string" ? fm.data.title : "";
@@ -95,13 +111,20 @@ function build(state: EditorState): DecorationSet {
     return builder.finish();
   }
 
-  const fm = parseFrontmatter(head);
   const lineClass = `cm-frontmatter${mode === "show" ? " show" : ""}`;
   const keyRe = found.format === "yaml" ? /^([\w.-]+)(\s*:)/ : /^([\w.-]+)(\s*=)/;
   for (let pos = 0; pos <= end; ) {
     const line = state.doc.lineAt(pos);
     const fence = line.from === 0 || line.to >= end;
-    builder.add(line.from, line.from, Decoration.line({ class: `${lineClass}${fence ? " cm-frontmatter-fence" : ""}${fm?.error && line.from === 0 ? " cm-frontmatter-error" : ""}`, attributes: fm?.error && line.from === 0 ? { title: fm.error } : {} }));
+    const problem = byLine.get(line.number);
+    builder.add(
+      line.from,
+      line.from,
+      Decoration.line({
+        class: `${lineClass}${fence ? " cm-frontmatter-fence" : ""}${problem ? " cm-frontmatter-invalid" : ""}`,
+        attributes: problem ? { title: problem, "aria-invalid": "true" } : {},
+      }),
+    );
     const m = !fence ? keyRe.exec(line.text) : null;
     if (m) builder.add(line.from, line.from + m[1].length, Decoration.mark({ class: "cm-frontmatter-key" }));
     if (line.to + 1 > end) break;

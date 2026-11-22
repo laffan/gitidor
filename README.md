@@ -30,7 +30,7 @@ one), how many files have changed, how many commits are ahead of or behind
 GitHub, and the last commit. The selected card has Pull, Commit, Push, Open
 site and a menu with the repository's settings, AI site detection, Open on
 GitHub and Remove. **Add Repo** is always last. **Settings** is the gear in the
-lower-left corner.
+lower-left corner, and beside it the **Console** button.
 
 **Files.** The folders you chose, each listing its markdown files newest
 first, with titles from frontmatter and a dot for anything changed. The ☰
@@ -43,7 +43,8 @@ sets it up for prose, with every hush text-editing shortcut on hush's keys
 (sentence and paragraph selection and movement, join lines, move lines,
 ⌘D instance stepping, ⌥-click multi-cursor, bold/italic/highlight/strike/
 quote/comment). Frontmatter in YAML (`---`) or TOML (`+++`) is kept out of the
-markdown parser and shown dimmed, folded, or plain. Images a post names are
+markdown parser and shown dimmed, folded, or plain; a frontmatter line the
+YAML (or TOML) parser rejects turns red, with the reason on hover. Images a post names are
 drawn under the line that names them. Paste or drop an image to save it into
 the repository where the site expects images and insert a reference to it.
 Saving is automatic.
@@ -56,6 +57,32 @@ The 👁 button opens the **preview** beside the text:
   around, it works out which source file each page came from and offers
   **Edit this post**. It shows what is pushed and built, and says so when the
   open file has changes that are not on it yet.
+
+## Console
+
+The button beside Settings (or ⇧⌘Y) slides a console up from the bottom of
+the window. It shows what the app is doing as it does it:
+
+- **git** — clone, fetch, pull, commit, push, branch switches and discards,
+  with the server's own `remote:` messages, which reference GitHub accepted or
+  refused, and the commit range a push sent;
+- **GitHub** — every API request with its status and time, and a warning when
+  the hourly rate limit is nearly used up;
+- **AI** — which provider and model was asked, how long it took, the tokens
+  used, and whether a fallback model answered;
+- **Preview** — each page the live preview loaded, redirects, and any image a
+  post names that is not in the repository;
+- **App** — opening, saving, creating and deleting files, folder changes,
+  going offline and back, and every backend call with its duration.
+
+Steps in flight (receiving a clone, sending a push) are progress bars at the
+top that fill and disappear. Routine lines (call timings, `remote:` messages,
+asset loads, saves) are hidden until **Details** is on. The filter tabs and
+search narrow it down; Copy puts what is shown on the clipboard for a bug
+report. Errors arriving while it is closed put a red count on its button. The
+panel's height is remembered; drag its top edge to change it. Tokens and keys
+never appear in it: every backend line passes through the same redaction as
+error messages.
 
 ## Site structure
 
@@ -117,7 +144,8 @@ posts.
 ## Shortcuts
 
 All of hush's text-editing shortcuts, plus: ⌘S save now, ⇧⌘P preview,
-⌘\ hide the side columns, ⇧⌘K commit, ⌘N new post, ⌘, settings. The full
+⌘\ hide the side columns, ⇧⌘K commit, ⌘N new post, ⇧⌘Y console,
+⌘, settings. The full
 list is in Settings → Shortcuts.
 
 ## What has and has not been run
@@ -131,8 +159,8 @@ Developed on Linux. Verified there:
   scheme. Network tests (`--ignored`): a real HTTPS clone and fetch through
   libgit2, GitHub's API for a real repository (including finding a custom
   domain from `CNAME`), and the live-preview proxy against the real blog.
-- **Frontend tests** — asset resolution, frontmatter in both formats, new-post
-  naming and templates.
+- **Frontend tests** — asset resolution, frontmatter in both formats and its
+  line-by-line validation, new-post naming and templates.
 - **In Chromium against the mock** — every column and sheet at desktop, iPad
   and iPhone widths, light and dark; hush's shortcuts acting on text; autosave,
   the commit sheet and new posts.
@@ -141,7 +169,8 @@ Developed on Linux. Verified there:
   `gitidor://local`, the draft preview, the live preview through the proxy,
   following a link in the live site and opening its source with *Edit this
   post*, and an edit committed and pushed through libgit2 (to a local bare
-  repository, not GitHub).
+  repository, not GitHub), with the console showing the backend's lines for
+  each step.
 
 **Not yet built or run on macOS, an iPad or an iPhone.** The iOS pieces
 follow what idlewild-editor ships, but nothing here has been through Xcode.

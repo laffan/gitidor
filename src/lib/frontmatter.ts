@@ -3,7 +3,7 @@
 // (Hugo's other convention). Parsed for display and for new-post templates;
 // the editor never rewrites a file's frontmatter on its own.
 
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 export type FrontFormat = "yaml" | "toml";
@@ -53,6 +53,101 @@ export function parseFrontmatter(text: string): Frontmatter | null {
     error = (e as Error).message;
   }
   return { format: found.format, raw, end: found.end, data, error };
+}
+
+export interface FrontmatterIssue {
+  /** 1-based line number in the whole file. */
+  line: number;
+  message: string;
+}
+
+/** Plain-language versions of the YAML parser's error codes. */
+const YAML_MESSAGES: Record<string, string> = {
+  MULTILINE_IMPLICIT_KEY: "Expected “key: value” — is a colon missing?",
+  DUPLICATE_KEY: "This key is already used above.",
+  TAB_AS_INDENT: "Tabs can't indent YAML; use spaces.",
+  MISSING_CHAR: "A quote or bracket is opened here and not closed.",
+  BAD_INDENT: "The indentation doesn't fit here.",
+  BAD_DQ_ESCAPE: "Invalid escape inside double quotes.",
+  UNEXPECTED_TOKEN: "Unexpected character.",
+};
+
+/**
+ * Lines worth suspecting, for placing an error the parser reports across a
+ * range. These never mark anything by themselves — YAML allows more than a
+ * line-by-line look can judge — they only say which line in a reported
+ * range is most likely the one to fix.
+ */
+function suspiciousLines(lines: string[]): Set<number> {
+  const out = new Set<number>();
+  let opener = false; // the previous content line opened a block (`key:` or `- `)
+  let prevIndent = 0;
+  lines.forEach((line, i) => {
+    if (!line.trim() || line.trimStart().startsWith("#")) return;
+    const indent = line.length - line.trimStart().length;
+    const body = line.trim();
+    if (/^\t/.test(line)) out.add(i);
+    else if (indent > prevIndent && !opener) out.add(i);
+    else if (indent === 0 && !/^-(\s|$)/.test(body) && !/^[^:#]+:(\s|$)/.test(body) && !/^["'][^"']*["']\s*:(\s|$)/.test(body)) out.add(i);
+    const unbalanced = (q: string) => (body.split(q).length - 1 - (body.match(new RegExp(`\\\\${q}`, "g"))?.length ?? 0)) % 2 === 1;
+    if (unbalanced('"') || (/:\s+'/.test(body) && unbalanced("'"))) out.add(i);
+    if ((body.match(/\[/g)?.length ?? 0) > (body.match(/\]/g)?.length ?? 0)) out.add(i);
+    if (/^[^:"']+:\s+[^"'\s][^#]*:\s/.test(body)) out.add(i);
+    opener = /:\s*([|>][-+]?)?$/.test(body) || /^-(\s|$)/.test(body);
+    prevIndent = indent;
+  });
+  return out;
+}
+
+/**
+ * Where a file's frontmatter does not parse, line by line. YAML reports every
+ * error it finds; TOML (smol-toml) stops at the first.
+ */
+export function frontmatterIssues(text: string): FrontmatterIssue[] {
+  const found = findFrontmatter(text);
+  if (!found) return [];
+  const raw = text.slice(found.rawStart, found.rawEnd);
+  const firstLine = text.slice(0, found.rawStart).split("\n").length; // 1-based line of raw's first line
+  const lines = raw.split("\n");
+  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  const lastContent = Math.max(0, lines.length - 1);
+  const lineOf = (offset: number) => Math.min(raw.slice(0, Math.max(0, offset)).split("\n").length - 1, lastContent);
+  const issues = new Map<number, string>();
+
+  if (found.format === "toml") {
+    try {
+      parseToml(raw);
+    } catch (e) {
+      const err = e as { line?: number; message?: string };
+      const line = Math.min(Math.max(1, err.line ?? 1), lines.length || 1) - 1;
+      issues.set(line, (err.message ?? "Invalid TOML").split("\n")[0].replace(/^Invalid TOML document:\s*/, ""));
+    }
+  } else {
+    const doc = parseDocument(raw, { prettyErrors: false, uniqueKeys: true });
+    const suspects = suspiciousLines(lines);
+    for (const err of doc.errors) {
+      const from = lineOf(err.pos[0]);
+      const to = lineOf(Math.max(err.pos[0], err.pos[1] - 1));
+      let line = from;
+      const inRange = [...suspects].filter((l) => l >= from && l <= to).sort((a, b) => a - b);
+      if (inRange.length) line = inRange[0];
+      // Reported on a line that looks fine, just before one that doesn't:
+      // how an over-indented line shows up (the error lands on its parent).
+      else if (suspects.has(from + 1)) line = from + 1;
+      else if (err.code === "MISSING_CHAR" || err.code === "BAD_INDENT") {
+        const before = [...suspects].filter((l) => l <= from).sort((a, b) => b - a);
+        if (before.length) line = before[0];
+      }
+      const plain =
+        err.code === "BLOCK_AS_IMPLICIT_KEY"
+          ? /^[^:]+:\s+[^"'].*:\s/.test(lines[line]?.trim() ?? "")
+            ? "A value containing “: ” has to be in quotes."
+            : "The indentation doesn't match the line above."
+          : (YAML_MESSAGES[err.code] ?? err.message);
+      if (!issues.has(line)) issues.set(line, plain);
+    }
+  }
+  return [...issues.entries()].sort((a, b) => a[0] - b[0]).map(([line, message]) => ({ line: firstLine + line, message }));
 }
 
 /** The text after the frontmatter. */

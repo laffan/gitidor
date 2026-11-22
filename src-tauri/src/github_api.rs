@@ -59,9 +59,21 @@ fn get(token: Option<&str>, url: &str) -> Result<Reply, String> {
     if let Some(token) = token {
         request = request.header("Authorization", &format!("Bearer {token}"));
     }
-    let mut response = request.call().map_err(|e| http::transport_error(&e, "GitHub"))?;
+    let started = std::time::Instant::now();
+    let path = url.strip_prefix(API).unwrap_or(url);
+    let mut response = request.call().map_err(|e| {
+        let message = http::transport_error(&e, "GitHub");
+        crate::events::warn("github", format!("GET {path} failed: {message}"));
+        message
+    })?;
     let status = response.status().as_u16();
     let text = response.body_mut().read_to_string().unwrap_or_default();
+    crate::events::debug("github", format!("GET {path} → {status} ({} ms)", started.elapsed().as_millis()));
+    if let Some(left) = response.headers().get("x-ratelimit-remaining").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u32>().ok()) {
+        if left < 10 {
+            crate::events::warn("github", format!("GitHub API: {left} requests left this hour"));
+        }
+    }
     let body = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
     Ok(Reply { status, body, text })
 }

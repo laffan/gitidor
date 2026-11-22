@@ -152,6 +152,23 @@ if (params.has("empty")) secrets = { githubLogin: "", hasGithubToken: false, has
 settings.ai.provider = "anthropic";
 
 const progressListeners = new Set<(p: unknown) => void>();
+const logListeners = new Set<(p: unknown) => void>();
+
+/** What the Rust side would send to the console. */
+function say(level: string, source: string, message: string, repoId: string | null = null) {
+  logListeners.forEach((fn) => fn({ level, source, message, repoId, progress: null }));
+}
+
+/** A progress bar that fills over `ms`, as libgit2's callbacks would drive it. */
+async function progress(source: string, label: string, total: number, unit: string, repoId: string, ms: number) {
+  const task = `${source}-${Math.random().toString(36).slice(2)}`;
+  const steps = 8;
+  for (let i = 0; i <= steps; i++) {
+    logListeners.forEach((fn) => fn({ level: "debug", source, message: label, repoId, progress: { task, label, current: Math.round((total * i) / steps), total, unit, done: false } }));
+    await delay(ms / steps);
+  }
+  logListeners.forEach((fn) => fn({ level: "debug", source, message: label, repoId, progress: { task, label, current: total, total, unit, done: true } }));
+}
 
 function changes(id: string): Change[] {
   const f = files[id] ?? {};
@@ -218,6 +235,8 @@ const handlers: Record<string, Handler> = {
       : { models: ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-luna"], message: "Key works — 3 models available." };
   },
   github_check_repo: async (a) => {
+    say("info", "github", `Checking access to ${String(a.address).replace(/^.*github\.com[:/]/, "").replace(/\.git$/, "")}`);
+    say("debug", "github", "GET /repos/laffan/blog.natelaffan.com → 200 (184 ms)");
     await delay(500);
     const [owner, repo] = String(a.address).replace(/^.*github\.com[:/]/, "").replace(/\.git$/, "").split("/");
     if (!owner || !repo) throw "Enter a repository address";
@@ -265,12 +284,22 @@ const handlers: Record<string, Handler> = {
   },
   reorder_repos: () => undefined,
   repo_status: (a) => status(String(a.id)),
-  repo_fetch: async (a) => (await delay(300), status(String(a.id))),
+  repo_fetch: async (a) => {
+    const id = String(a.id);
+    say("debug", "git", `Fetching ${meta[id].branch} from GitHub`, id);
+    await delay(300);
+    say("debug", "github", "remote: Enumerating objects: 9, done.", id);
+    say(meta[id].behind ? "info" : "debug", "git", meta[id].behind ? `${meta[id].behind} new commits on GitHub's ${meta[id].branch}` : `Nothing new on GitHub's ${meta[id].branch}`, id);
+    return status(id);
+  },
   repo_pull: async (a) => {
-    await delay(500);
-    const m = meta[String(a.id)];
+    const id = String(a.id);
+    say("debug", "git", `Fetching ${meta[id].branch} from GitHub`, id);
+    await progress("git", "Fetching", 46, "objects", id, 900);
+    const m = meta[id];
     const commits = m.behind;
     m.behind = 0;
+    say("info", "git", commits ? `Fast-forwarded ${m.branch} by ${commits} commits` : `${m.branch} is already up to date`, id);
     return { outcome: commits ? { kind: "fastForward", commits } : { kind: "upToDate" }, status: status(String(a.id)) };
   },
   repo_commit: async (a) => {
@@ -282,12 +311,19 @@ const handlers: Record<string, Handler> = {
     }
     meta[id].ahead++;
     meta[id].log.unshift({ summary: String(a.message), time: Date.now() });
+    const n = (a.paths as string[]).length;
+    say("info", "git", `Committed 4f2e9a1 “${a.message}” (${n} file${n === 1 ? "" : "s"})`, id);
     return status(id);
   },
   repo_push: async (a) => {
-    await delay(600);
-    meta[String(a.id)].ahead = 0;
-    return status(String(a.id));
+    const id = String(a.id);
+    say("info", "git", `Pushing ${meta[id].branch} to GitHub`, id);
+    await progress("git", "Sending objects", 12, "objects", id, 1200);
+    say("debug", "git", "remote: Resolving deltas: 100% (3/3), completed with 3 local objects.", id);
+    say("debug", "git", `GitHub accepted refs/heads/${meta[id].branch}`, id);
+    meta[id].ahead = 0;
+    say("info", "git", `Pushed a1b2c3d..4f2e9a1 to ${meta[id].branch}`, id);
+    return status(id);
   },
   repo_branches: (a) => {
     const m = meta[String(a.id)];
@@ -381,7 +417,17 @@ const handlers: Record<string, Handler> = {
   rename_file: () => undefined,
   delete_file: (a) => void delete files[String(a.id)][String(a.path)],
   import_asset: (a) => `${a.dir}/${a.name}`,
-  detect_site: async () => (await delay(900), { ...profile, source: "ai", notes: "Eleventy copies public/blog-images to /images/blog/; posts use the folder data file's permalink." }),
+  detect_site: async (a) => {
+    const id = String(a.id);
+    if (a.useAi) {
+      say("info", "ai", "Asking Anthropic (claude-opus-5-5) about the site's structure", id);
+      say("debug", "ai", "Sending the file listing, config files and sample posts (18,412 characters)", id);
+      await delay(900);
+      say("info", "ai", "Anthropic answered in 7.4 s — 6,120 tokens in, 412 out", id);
+    }
+    say("info", a.useAi ? "ai" : "app", "Site structure (eleventy, from AI): posts → /blog/{fileSlug}/; 4 image folders mapped", id);
+    return { ...profile, source: a.useAi ? "ai" : "heuristic", notes: "Eleventy copies public/blog-images to /images/blog/; posts use the folder data file's permalink." };
+  },
   save_site: (a) => {
     repos = repos.map((r) => (r.id === a.id ? { ...r, site: a.profile as SiteProfile } : r));
     return repos.find((r) => r.id === a.id);
@@ -417,10 +463,11 @@ export function mockBackend() {
       return (await fn(args)) as T;
     },
     listen: async <T>(event: string, handler: (payload: T) => void) => {
-      if (event !== "clone-progress") return () => undefined;
       const fn = handler as (p: unknown) => void;
-      progressListeners.add(fn);
-      return () => progressListeners.delete(fn);
+      const set = event === "clone-progress" ? progressListeners : event === "log" ? logListeners : null;
+      if (!set) return () => undefined;
+      set.add(fn);
+      return () => set.delete(fn);
     },
   };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { imageReference, liveUrl, localUrl, normalizePath, publicAddress, resolveAsset, splitPublicUrl } from "./site";
-import { body, findFrontmatter, newPostName, newPostText, parseFrontmatter, slugify } from "./frontmatter";
+import { body, findFrontmatter, frontmatterIssues, newPostName, newPostText, parseFrontmatter, slugify } from "./frontmatter";
 import type { SiteProfile } from "./types";
 
 // The asset maps detected from the blog this app was written for.
@@ -115,5 +115,41 @@ describe("frontmatter", () => {
     expect(newPostName(["2024-02-29-leap.markdown", "2024-03-01-x.markdown"], "New", "2026-11-22")).toBe("2026-11-22-new.markdown");
     expect(newPostName(["about.md", "now.md"], "Café Notes", "2026-11-22")).toBe("cafe-notes.md");
     expect(slugify("  Hello, World!  ")).toBe("hello-world");
+  });
+});
+
+describe("frontmatter validation", () => {
+  const lines = (fm: string) => frontmatterIssues(`---\n${fm}---\nbody\n`).map((i) => i.line);
+
+  it("passes valid frontmatter", () => {
+    expect(lines("title: Crickets\ndate: 2010-03-14\ntags:\n  - music\nsummary: \"A: quoted colon\"\n")).toEqual([]);
+    expect(frontmatterIssues("no frontmatter")).toEqual([]);
+  });
+
+  it("marks the line that breaks, in file line numbers", () => {
+    // Line 1 is the opening fence, so the frontmatter's second line is line 3.
+    expect(lines("title: Crickets\ndate 2010-03-14\nsummary: ok\n")).toEqual([3]);
+    expect(lines("title: a\ntitle: b\n")).toEqual([3]);
+    expect(lines("title: a\n\tdate: b\n")).toEqual([3]);
+    expect(lines("title: x\ntags: [a, b\nsummary: y\n")).toEqual([3]);
+  });
+
+  it("places range errors on the suspicious line", () => {
+    // The parser reports this on `title:`; the over-indented line is the problem.
+    expect(lines("title: Crickets\n tags:\n- a\n")).toEqual([3]);
+    // An unclosed quote is reported at the end; the quote opened on line 2.
+    expect(lines('title: "unclosed\ndate: 2010\n')).toEqual([2]);
+  });
+
+  it("explains an unquoted colon in a value", () => {
+    const [issue] = frontmatterIssues("---\nsummary: The Low Anthem: on to something\n---\n");
+    expect(issue.line).toBe(2);
+    expect(issue.message).toMatch(/quotes/);
+  });
+
+  it("validates TOML too", () => {
+    const issues = frontmatterIssues("+++\ntitle = 'a'\ndate 2010\n+++\n");
+    expect(issues.map((i) => i.line)).toEqual([3]);
+    expect(frontmatterIssues("+++\ntitle = 'a'\n+++\n")).toEqual([]);
   });
 });
