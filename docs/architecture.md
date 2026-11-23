@@ -28,6 +28,10 @@ src/                         the interface (TypeScript, no framework)
   ui/upload-folder.ts        an upload folder: thumbnails or list, the + picker, drops
   ui/upload-menu.ts          an upload's menu and markdown; which files are pictures, video, sound
   ui/media-view.ts           a picture, video or sound shown in the editor column
+  ui/site-frame.ts           the live site's small browser: back, forward, reload, the
+                             address, the proxied frame, each page looked up to its file
+  ui/site-view.ts            the published site in the editor column, from the Files
+                             column's globe; Edit Post, and the file found in the list
   ui/editor-ref.ts           the editor handle, for code that inserts text without the column
   ui/upload-peek.ts          what those frontmatter buttons match, their hover preview, where a click goes
   lib/upload-refs.ts         file names on a frontmatter line → the upload each one means
@@ -147,7 +151,18 @@ same repository:
   scheme handler everywhere.
 
 Both load in an iframe sandboxed without `allow-same-origin`: page scripts
-run with an opaque origin and cannot reach Tauri's IPC. The draft frame is a
+run with an opaque origin and cannot reach Tauri's IPC.
+
+The live frame and its controls are `ui/site-frame.ts`, used twice: by the
+live preview beside a post, and by the site browser that takes the editor
+column's place (`ui/site-view.ts`, from the globe beside the repository's
+name). Each `nav` is looked up with `site_lookup`; a lookup that comes back
+after a later page has loaded is dropped. The site browser puts the file it
+finds in `store.siteHit`: its bar shows Edit Post, and the Files column opens
+the file's folders, scrolls the file to just under its folder's sticky name
+(padding the end of the list by as much as that needs, while the site is
+showing) and outlines it. Opening any file, showing an upload, or choosing
+another repository closes the site. The draft frame is a
 fixed `srcdoc` skeleton that receives rendered HTML by `postMessage`, so
 inserted HTML never runs scripts and scroll position survives re-rendering.
 

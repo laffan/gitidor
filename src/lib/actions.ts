@@ -98,6 +98,7 @@ export async function selectRepo(id: string, opts: { showFiles?: boolean } = {})
     store.viewing = null;
     emit("viewer");
   }
+  if (changed && store.browsing && store.browsing.repoId !== id) closeBrowser();
   if (opts.showFiles) store.layout.pane = "files";
   store.layout.drawer = false;
   remember();
@@ -301,6 +302,7 @@ let statusTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Show a picture, video or sound from an upload folder in the editor column. */
 export function viewUpload(repoId: string, folder: string, path: string) {
+  closeBrowser();
   store.viewing = { repoId, folder, path };
   store.layout.pane = "editor";
   emit("viewer", "layout", "files");
@@ -313,6 +315,38 @@ export function closeViewer() {
   emit("viewer", "files");
 }
 
+/** Show the repository's published site in the editor column, from its home
+ *  page. The open post stays open underneath. */
+export function browseSite(repoId: string) {
+  closeViewer();
+  store.browsing = { repoId };
+  store.siteHit = null;
+  store.layout.pane = "editor";
+  emit("browser", "layout");
+}
+
+/** Back to the post (or the empty editor) from the site. */
+export function closeBrowser() {
+  if (!store.browsing) return;
+  store.browsing = null;
+  store.siteHit = null;
+  emit("browser");
+}
+
+/** The site browser reached a page; `file` is the one it was built from, if
+ *  the site profile can name one. Its folder opens, so the Files column can
+ *  show it. */
+export function siteReached(file: { repoId: string; path: string } | null) {
+  if (!store.browsing) return;
+  store.siteHit = file;
+  if (file) {
+    for (const folder of repoById(file.repoId)?.folders ?? []) {
+      if (file.path.startsWith(`${folder}/`)) store.collapsed.delete(folderKey(file.repoId, folder));
+    }
+  }
+  emit("browser");
+}
+
 /** `restoring`: reopening the last session's file at launch, which says
  *  nothing if the file has gone since. */
 export async function openFile(repoId: string, path: string, opts: { restoring?: boolean } = {}) {
@@ -323,8 +357,10 @@ export async function openFile(repoId: string, path: string, opts: { restoring?:
     store.openFile = { repoId, path, saved: text, text, state: "saved", error: null };
     store.layout.pane = "editor";
     store.viewing = null;
+    store.browsing = null;
+    store.siteHit = null;
     remember();
-    emit("file", "layout", "files", "save", "viewer");
+    emit("file", "layout", "files", "save", "viewer", "browser");
   } catch (e) {
     if (opts.restoring) {
       log.debug("files", `Last session's ${path} is not there any more`, repoId);

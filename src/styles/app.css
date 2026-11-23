@@ -162,6 +162,22 @@ textarea {
   white-space: nowrap;
 }
 
+/* The repository's name sits beside its globe; the space after it is the
+   drag region. */
+.col-files .column-head h2 {
+  flex: 0 1 auto;
+}
+
+.column-head .grow {
+  flex: 1;
+  align-self: stretch;
+}
+
+/* Room under the list for the site page's file to reach the top (files-column.ts). */
+.col-files .column-body {
+  padding-bottom: calc(12px + var(--hit-room, 0px));
+}
+
 .column-body {
   flex: 1;
   min-height: 0;
@@ -422,7 +438,8 @@ html.platform-macos #app.hide-repos.hide-files .editor-bar {
   font-weight: 600;
   font-size: 12px;
   position: sticky;
-  top: 0;
+  /* Over the list's top padding too, so no row shows above it. */
+  top: -2px;
   background: var(--bg-files);
   z-index: 1;
 }
@@ -509,6 +526,28 @@ html.platform-macos #app.hide-repos.hide-files .editor-bar {
 .file-row.draft .title span {
   color: var(--text-2);
   font-style: italic;
+}
+
+/* The file the site browser's page was built from (site-view.ts): a thin
+   ring, and a tint that fades when it is first found. */
+.file-row.site-hit {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+.file-row.site-hit.found {
+  animation: site-found 1.8s ease-out;
+}
+
+@keyframes site-found {
+  from {
+    background-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-row.site-hit.found {
+    animation: none;
+  }
 }
 
 /* ── upload folders (upload-folder.ts) ── */

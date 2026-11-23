@@ -2,9 +2,11 @@
 // markdown files under it and a menu (new post, refresh, remove) across from
 // its name; then the upload folders, as thumbnails (upload-folder.ts).
 // "Add Folder" is always last. The head has the button that shows
-// and hides the repositories column, the repository's name, and — when it
-// has changes — the same Commit button as its card. Resting the pointer on
-// a file's change dot shows what changed in it.
+// and hides the repositories column, the repository's name, a globe that
+// shows the published site in the editor column (site-view.ts), and — when
+// it has changes — the same Commit button as its card. Resting the pointer
+// on a file's change dot shows what changed in it. The file the site's page
+// was built from is scrolled to the top and marked.
 
 import { h, icon, iconButton, replace } from "../lib/dom";
 import { activeRepo, emit, folderKey, on, store } from "../lib/store";
@@ -14,7 +16,7 @@ import { openMenu } from "./menu";
 import { openAddFolder } from "./add-folder";
 import { confirmModal, promptModal } from "./modal";
 import { openExternal } from "../lib/ipc";
-import { publicAddress } from "../lib/site";
+import { publicAddress, splitPublicUrl } from "../lib/site";
 import { openCommit } from "./commit";
 import { changeTooltip } from "./diff-view";
 import { resizeHandle } from "./resize";
@@ -49,6 +51,18 @@ export function filesColumn(): HTMLElement {
   );
   commitBtn.append(badge);
 
+  const globeBtn = iconButton(
+    "globe",
+    "Browse the site",
+    () => {
+      const id = store.activeRepoId;
+      if (!id) return;
+      if (store.browsing?.repoId === id) actions.closeBrowser();
+      else actions.browseSite(id);
+    },
+    { class: "icon-btn site-btn", hidden: true },
+  );
+
   const col = h(
     "section",
     { class: "column col-files", "aria-label": "Files" },
@@ -58,6 +72,8 @@ export function filesColumn(): HTMLElement {
       iconButton("back", "Repositories", () => actions.setLayout({ pane: "repos" }), { class: "icon-btn only-phone" }),
       iconButton("sidebar", "Show or hide the repositories", () => toggleRepos(), { class: "icon-btn not-phone" }),
       title,
+      globeBtn,
+      h("span", { class: "grow", "data-tauri-drag-region": "" }),
       commitBtn,
     ),
     h("div", { class: "files-filter" }, search),
@@ -65,9 +81,16 @@ export function filesColumn(): HTMLElement {
     resizeHandle("files"),
   );
 
+  /** The site page's file last scrolled to, so it is scrolled to once. */
+  let scrolledTo = "";
+
   function render() {
     const repo = activeRepo();
     title.textContent = repo ? repo.name : "Files";
+    const site = repo ? splitPublicUrl(repo.publicUrl) : null;
+    globeBtn.hidden = !site;
+    globeBtn.classList.toggle("on", !!repo && store.browsing?.repoId === repo.id);
+    globeBtn.title = site ? `Browse ${site.origin.replace(/^https?:\/\//, "")}${site.base}` : "";
     const changes = repo ? (store.status[repo.id]?.changes.length ?? 0) : 0;
     commitBtn.hidden = !changes;
     badge.textContent = String(changes);
@@ -84,8 +107,30 @@ export function filesColumn(): HTMLElement {
       repo.folders.length + uploads.length === 0 ? h("div", { class: "empty" }, h("strong", null, "No folders yet"), "Add the folder your posts live in.") : null,
       h("button", { class: "add-row", type: "button", onclick: () => void openAddFolder(repo.id) }, icon("plus"), "Add Folder"),
     );
+    findSiteHit();
   }
-  on(["repos", "files", "file", "status"], render);
+
+  /** Bring the site page's file to the top of the column, under its
+   *  folder's name, the first time it is drawn. A file near the end of the
+   *  list gets room under the list to get there, while the site is showing. */
+  function findSiteHit() {
+    if (!store.browsing) body.style.removeProperty("--hit-room");
+    const hit = store.siteHit;
+    const key = hit ? `${hit.repoId}:${hit.path}` : "";
+    if (key === scrolledTo) return;
+    const row = key ? body.querySelector<HTMLElement>(".file-row.site-hit") : null;
+    if (key && !row) return; // Not listed yet; the next draw may have it.
+    scrolledTo = key;
+    if (!row) return;
+    row.classList.add("found");
+    const head = row.closest(".folder")?.querySelector<HTMLElement>(".folder-head");
+    const top = Math.max(0, body.scrollTop + row.getBoundingClientRect().top - body.getBoundingClientRect().top - (head?.offsetHeight ?? 0));
+    body.style.removeProperty("--hit-room");
+    const room = body.scrollHeight - body.clientHeight;
+    if (top > room) body.style.setProperty("--hit-room", `${Math.ceil(top - room)}px`);
+    body.scrollTo({ top, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }
+  on(["repos", "files", "file", "status", "browser"], render);
   render();
   return col;
 }
@@ -162,12 +207,13 @@ function folderSection(repo: RepoRecord, folder: string): HTMLElement {
 
 function fileRow(repo: RepoRecord, folder: string, f: FileEntry): HTMLElement {
   const open = store.openFile?.repoId === repo.id && store.openFile.path === f.path;
+  const hit = store.siteHit?.repoId === repo.id && store.siteHit.path === f.path;
   const within = f.path.slice(folder.length + 1);
   const sub = [f.date, within !== f.name ? within : f.name].filter(Boolean).join(" · ");
   return h(
     "button",
     {
-      class: `file-row ${open ? "active" : ""} ${f.draft ? "draft" : ""}`,
+      class: `file-row ${open ? "active" : ""} ${f.draft ? "draft" : ""} ${hit ? "site-hit" : ""}`,
       type: "button",
       title: f.path,
       onclick: () => void actions.openFile(repo.id, f.path),

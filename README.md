@@ -39,7 +39,14 @@ vision** and the **Console** button. They are in a footer the repositories and
 Files columns share, so they stay in reach when the repositories are hidden.
 
 **Files.** The folders you chose, each listing its markdown files newest
-first, with titles from frontmatter and a dot for anything changed. Rest the
+first, with titles from frontmatter and a dot for anything changed. The
+**globe** beside the repository's name shows the published site, from its
+home page, in the editor column in place of the post, in the live preview's
+small browser (back, forward, reload, the address). When a page is one a file
+was built from, **Edit Post** appears in the bar, and the file is scrolled to
+the top of the Files column and outlined (its folder opens if it was
+closed). Edit Post, or clicking the file, opens it in the editor and the site
+goes; × or Esc goes back to the post that was open. Rest the
 pointer on a dot to see what changed in that file since the last commit, word
 by word: deletions struck through in red, insertions highlighted in green.
 When the repository has changes, a **Commit** button with their count sits
@@ -238,12 +245,17 @@ Developed on Linux. Verified there:
   sheet, dragging column edges, night vision over the preview, clicking draft
   preview text to move the editor, and the live preview's note through an
   edit, a push, and the page catching up (with a stand-in page that reports
-  its text as the proxy's script does).
+  its text as the proxy's script does). The site browser from the globe, with
+  stand-in pages the same way: Edit Post on a post's page and not on others,
+  the Files column scrolling the post under its folder's name (a closed
+  folder opening, room added under the last posts), and opening the post
+  from either place.
 - **The Tauri app itself, built and run on Linux (WebKitGTK)** with a copy of
   the blog: the folder listing, opening posts, inline images through
   `gitidor://local`, the draft preview, the live preview through the proxy,
   following a link in the live site and opening its source with *Edit this
-  post*, and an edit committed and pushed through libgit2 (to a local bare
+  post* (before the site browser was added; it uses the same frame and
+  proxy, but has not been run in the app), and an edit committed and pushed through libgit2 (to a local bare
   repository, not GitHub), with the console showing the backend's lines for
   each step.
 

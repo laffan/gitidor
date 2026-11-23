@@ -7,6 +7,7 @@
 // pretends to be an iPad.
 
 import { parseFrontmatter } from "../lib/frontmatter";
+import { splitPublicUrl } from "../lib/site";
 import { setMockAssetUrl } from "../ui/asset-url";
 import type { Change, RepoRecord, SecretStatus, Settings, SiteProfile } from "../lib/types";
 import { defaultSettings } from "../lib/store";
@@ -614,7 +615,10 @@ const handlers: Record<string, Handler> = {
   site_lookup: (a) => {
     const id = String(a.id);
     const repo = repos.find((r) => r.id === id)!;
-    const want = String(a.urlPath).replace(/\/+$/, "");
+    // The path has the site's base path in it, as `site_lookup` in Rust takes it.
+    const base = splitPublicUrl(repo.publicUrl)?.base ?? "";
+    const path = String(a.urlPath);
+    const want = (base && path.startsWith(base) ? path.slice(base.length) : path).replace(/\/+$/, "");
     for (const [path, text] of Object.entries(files[id] ?? {})) {
       if ((urlFor(repo, path, text) ?? "").replace(/\/+$/, "") === want) return path;
     }

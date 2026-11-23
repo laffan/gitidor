@@ -1,6 +1,7 @@
 // Column 3: the open file, the preview toggle above it, and a footer with the
 // word count and where the post is published. An upload clicked in the Files
-// column is shown here in place of the post (media-view.ts).
+// column is shown here in place of the post (media-view.ts), and so is the
+// published site, from the globe beside the repository's name (site-view.ts).
 
 import { h, iconButton } from "../lib/dom";
 import { emit, knownFile, on, repoById, store } from "../lib/store";
@@ -14,6 +15,7 @@ import { assetUrl } from "./asset-url";
 import { resizeHandle } from "./resize";
 import { setEditor } from "./editor-ref";
 import { mediaView } from "./media-view";
+import { siteView } from "./site-view";
 import { uploadLinkerFor } from "./upload-peek";
 import { log } from "../lib/log";
 import { locate } from "../lib/locate";
@@ -31,11 +33,13 @@ export function editorColumn(): HTMLElement {
     "Files",
     () => {
       actions.closeViewer();
+      actions.closeBrowser();
       actions.setLayout({ pane: "files" });
     },
     { class: "icon-btn only-phone" },
   );
   const media = mediaView();
+  const site = siteView();
   const host = h("div", { class: "editor-host" });
   const empty = h(
     "div",
@@ -55,7 +59,8 @@ export function editorColumn(): HTMLElement {
   const where = h("span", { class: "post-info" });
   media.info.classList.add("media-foot");
   media.link.classList.add("media-foot");
-  const foot = h("div", { class: "editor-foot" }, words, where, media.info, media.link);
+  site.info.classList.add("site-foot");
+  const foot = h("div", { class: "editor-foot" }, words, where, media.info, media.link, site.info);
 
   const appearance = (): EditorAppearance => ({
     spellcheck: store.settings.appearance.spellcheck,
@@ -146,6 +151,7 @@ export function editorColumn(): HTMLElement {
     drawViewer();
     if (!store.viewing) load();
   });
+  on("browser", () => col.classList.toggle("browsing", !!store.browsing));
   on("save", drawSave);
   on("files", () => {
     drawWhere();
@@ -157,9 +163,10 @@ export function editorColumn(): HTMLElement {
   const col: HTMLElement = h(
     "section",
     { class: "column col-editor", "aria-label": "Editor" },
-    h("div", { class: "editor-bar", "data-tauri-drag-region": "" }, backBtn, sidebarBtn, title, saveState, previewBtn, media.actions),
+    h("div", { class: "editor-bar", "data-tauri-drag-region": "" }, backBtn, sidebarBtn, title, site.bar, saveState, previewBtn, media.actions),
     split,
     media.el,
+    site.el,
     foot,
   );
   load();

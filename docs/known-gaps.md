@@ -25,7 +25,12 @@ Most important first.
    traffic lights by padding when the platform is macOS; the exact spacing has
    not been seen on a Mac.
 
-6. **Clicking text in the live preview** and the live note's page text. The
+6. **The site browser** (the globe in the Files column). It is the live
+   preview's frame and proxy, opened at the site's base path, and was run in
+   Chromium against the mock with stand-in pages that report their path as
+   the proxy's script does; not in the Tauri app, so not through the proxy
+   in WebKitGTK or WKWebView.
+7. **Clicking text in the live preview** and the live note's page text. The
    script is the same one that runs in the draft preview, exercised in
    Chromium; in a live page it has run only against a stand-in page there,
    not through the proxy in WebKitGTK or WKWebView.

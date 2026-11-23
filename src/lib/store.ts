@@ -4,7 +4,7 @@
 
 import type { FileEntry, RepoRecord, RepoStatus, SecretStatus, Settings, UploadEntry } from "./types";
 
-export type Topic = "repos" | "status" | "files" | "file" | "settings" | "secrets" | "layout" | "preview" | "save" | "log" | "console" | "viewer";
+export type Topic = "repos" | "status" | "files" | "file" | "settings" | "secrets" | "layout" | "preview" | "save" | "log" | "console" | "viewer" | "browser";
 
 export interface OpenFile {
   repoId: string;
@@ -60,6 +60,13 @@ export const store = {
   /** An upload shown in the editor column in place of the post, if any. The
    *  open post stays open underneath. */
   viewing: null as { repoId: string; folder: string; path: string } | null,
+  /** The published site shown in the editor column in place of the post, if
+   *  any (site-view.ts). A new object each time it is opened, so opening it
+   *  again starts from the home page. The open post stays open underneath. */
+  browsing: null as { repoId: string } | null,
+  /** The file the site browser's page was built from, when the site profile
+   *  can name one: "Edit Post" opens it, and the Files column finds it. */
+  siteHit: null as { repoId: string; path: string } | null,
   // The repositories column starts hidden; the Files column's sidebar button
   // and ⌘\ bring it back.
   layout: { repos: false, files: true, drawer: false, pane: "repos" as Pane },
