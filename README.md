@@ -176,6 +176,26 @@ For `laffan/blog.natelaffan.com` the rule-based reading gives `posts` →
 `public/blog-images/`, with `https://blog.natelaffan.com/` found from the
 `CNAME` file.
 
+## Download
+
+Mac builds are on the [Releases](https://github.com/laffan/gitidor/releases)
+page: `AppleSilicon.dmg` for M-series Macs, `MacIntel.dmg` for Intel Macs.
+They need macOS 12 or later. They are not signed with an Apple Developer
+certificate, so macOS blocks the app the first time; after dragging it to
+Applications, run this once in Terminal:
+
+```sh
+xattr -cr "/Applications/gitidor.app"
+```
+
+The iPad and iPhone apps are not on the Releases page: they are built and
+installed from Xcode, as described under Setting up.
+
+Releases are made by the Release workflow (`.github/workflows/release.yml`):
+Actions → Release → Run workflow builds both Mac installers and attaches them
+to a draft release tagged `v` plus the version in `src-tauri/tauri.conf.json`.
+Publish the draft on GitHub to release it.
+
 ## Setting up
 
 ```sh
